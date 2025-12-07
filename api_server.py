@@ -17,7 +17,16 @@ DB_CONFIG = {
 
 app = Flask(__name__)
 # Enable CORS for the frontend to communicate with this API
-CORS(app) 
+# Allow all origins and methods for development (restrict in production!)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": False
+    }
+}) 
 
 def get_db_connection():
     """Establishes and returns a connection to the PostgreSQL database."""
@@ -49,7 +58,6 @@ def get_image_details(image_id):
                 SELECT
                     i.image_id,
                     i.description,
-                    i.date,
                     i.highres_path AS path, -- Assuming the frontend expects 'path' to be the high-res path
                     COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}') AS tags
                 FROM 
@@ -61,7 +69,7 @@ def get_image_details(image_id):
                 WHERE 
                     i.image_id = %s
                 GROUP BY 
-                    i.id, i.image_id, i.description, i.date, i.highres_path;
+                    i.id, i.image_id, i.description, i.highres_path;
             """
             cur.execute(sql_query, (image_id,))
             image_details = cur.fetchone()
@@ -91,13 +99,17 @@ def update_tags(image_id):
     Replaces all existing tags for a specific image_id (the path string) with a new list of tags.
     This route now accepts both PUT and POST methods.
     """
+    print(f"[DEBUG] update_tags called with image_id: {image_id}, method: {request.method}")
+    
     conn = get_db_connection()
     if not conn:
+        print(f"[ERROR] Database connection failed for update_tags")
         return jsonify({"success": False, "message": "Database unavailable"}), 503
 
     image_pk_id = None # Initialize to handle error logging
     try:
         data = request.get_json()
+        print(f"[DEBUG] Received data: {data}")
         new_tags = data.get('tags', [])
         
         if not isinstance(new_tags, list):
@@ -135,7 +147,8 @@ def update_tags(image_id):
                     # STEP 4: Link the image and the tag in the image_tags table
                     sql_link = "INSERT INTO image_tags (image_id, tag_id) VALUES (%s, %s);"
                     cur.execute(sql_link, (image_pk_id, tag_id))
-
+        
+        print(f"[SUCCESS] Tags updated for image_id={image_id}, count={len(cleaned_tags)}")
         return jsonify({"success": True, "message": f"Tags updated successfully. {len(cleaned_tags)} tags applied."}), 200
 
     except Exception as e:
@@ -148,25 +161,92 @@ def update_tags(image_id):
 # =======================================================================
 # OTHER ROUTES
 # =======================================================================
+@app.route('/api/images', methods=['GET'])
+def list_images():
+    """
+    Retrieves all images with their metadata including tags.
+    Returns a JSON array of all images in the database.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"success": False, "message": "Database unavailable"}), 503
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            sql_query = """
+                SELECT
+                    i.image_id,
+                    i.film_type,
+                    i.batch_info,
+                    i.filename_base,
+                    i.film_stock,
+                    i.thumbnail_path,
+                    i.highres_path,
+                    i.description,
+                    COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}') AS tags
+                FROM 
+                    images i
+                LEFT JOIN 
+                    image_tags it ON i.id = it.image_id
+                LEFT JOIN 
+                    tags t ON it.tag_id = t.id
+                GROUP BY 
+                    i.id, i.image_id, i.film_type, i.batch_info, i.filename_base, 
+                    i.film_stock, i.thumbnail_path, i.highres_path, i.description
+                ORDER BY i.id;
+            """
+            cur.execute(sql_query)
+            images = cur.fetchall()
+            
+            return jsonify({"success": True, "images": images, "count": len(images)}), 200
+
+    except Exception as e:
+        print(f"Error fetching images list: {e}")
+        return jsonify({"success": False, "message": "Internal server error during data retrieval"}), 500
+    finally:
+        if conn:
+            conn.close()
+
 @app.route('/api/images/<path:image_id>/description', methods=['PUT'])
 def update_description(image_id):
     """Updates the description field for a specific image_id."""
-    # ... your existing update_description code here ...
-    pass
+    print(f"[DEBUG] update_description called with image_id: {image_id}")
     
-@app.route('/api/images/<path:image_id>/tag', methods=['POST'])
-def add_tag(image_id):
-    """Simulates adding a tag. Keeping this route separate for now."""
-    data = request.get_json()
-    new_tag = data.get('tag', '').strip()
-    
-    if not new_tag:
-        return jsonify({"success": False, "message": "Tag missing"}), 400
+    conn = get_db_connection()
+    if not conn:
+        print(f"[ERROR] Database connection failed for update_description")
+        return jsonify({"success": False, "message": "Database unavailable"}), 503
 
-    # This route should likely be removed if 'update_tags' is used for all tag modification.
-    print(f"Simulated POST to DB: Adding tag '{new_tag}' to image '{image_id}'")
-    
-    return jsonify({"success": True, "message": f"Tag '{new_tag}' added (simulated). You need to implement the database logic."}), 200
+    try:
+        data = request.get_json()
+        print(f"[DEBUG] Received data: {data}")
+        new_description = data.get('description', '').strip()
+        
+        with conn:
+            with conn.cursor() as cur:
+                # Check if image exists
+                cur.execute("SELECT id FROM images WHERE image_id = %s;", (image_id,))
+                image_db_row = cur.fetchone()
+                
+                if not image_db_row:
+                    return jsonify({"success": False, "message": f"Image path '{image_id}' not found in the database."}), 404
+                
+                # Update description
+                cur.execute(
+                    "UPDATE images SET description = %s WHERE image_id = %s;",
+                    (new_description, image_id)
+                )
+        
+        print(f"[SUCCESS] Description updated for image_id={image_id}")
+        return jsonify({"success": True, "message": "Description updated successfully."}), 200
+
+    except Exception as e:
+        print(f"Error updating description for {image_id}: {e}")
+        return jsonify({"success": False, "message": "Internal server error during description update"}), 500
+    finally:
+        if conn:
+            conn.close()
+
 
 
 if __name__ == '__main__':

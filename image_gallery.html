@@ -176,7 +176,7 @@
 
     <script>
         // --- CONFIGURATION ---
-        const API_BASE_URL = '/api/images'; // Base URL for metadata interaction
+        const API_BASE_URL = 'http://172.16.8.26:5000/api/images'; // Base URL for metadata interaction
         const INITIAL_LOAD_COUNT = 10;
         const LOAD_BATCH_COUNT = 10;
         const CURRENT_USER_ID = 'user-001-collaborator'; // Simulated logged-in user ID
@@ -234,17 +234,22 @@
 
         async function loadData() {
             try {
-                // Fetch data from the assumed JSON file
-                const response = await fetch('./image_data.json');
+                // Fetch data from the API server
+                const response = await fetch(API_BASE_URL);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                ALL_IMAGES = await response.json();
-                console.log(`Successfully loaded ${ALL_IMAGES.length} image records.`);
+                const data = await response.json();
+                if (data.success && data.images) {
+                    ALL_IMAGES = data.images;
+                    console.log(`Successfully loaded ${ALL_IMAGES.length} image records from database.`);
+                } else {
+                    throw new Error('Invalid API response format');
+                }
             } catch (error) {
-                console.error("Could not load image_data.json.", error);
+                console.error("Could not load images from API.", error);
                 // Critical error handling without using placeholder data
-                alertMessage('Critical Error: Could not load required image data (image_data.json). Displaying empty library.', 'bg-red-700');
+                alertMessage('Critical Error: Could not load required image data from API. Make sure the API server is running on http://172.16.8.26:5000', 'bg-red-700');
                 ALL_IMAGES = []; 
             }
         }
@@ -501,23 +506,23 @@
             }
 
 try {
-        // Actual POST request to add a tag
+        // Calculate the new tags array and send it to the API
+        const updatedTags = [...(activeImage.tags || []), newTag].sort();
+        
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tag: newTag, user_id: CURRENT_USER_ID })
+            body: JSON.stringify({ tags: updatedTags })
         });
 
         if (response.ok) {
             // Update local state (activeImage and ALL_IMAGES)
-            const updatedTags = [...(activeImage.tags || []), newTag].sort();
             activeImage.tags = updatedTags;
             updateLocalImage(activeImage.image_id, { tags: updatedTags });
             
             // Update UI
             renderModalTags();
             tagInput.value = '';
-            // *** UPDATED SUCCESS MESSAGE ***
             alertMessage(`Tag '${newTag}' added successfully.`, 'bg-green-600');
         } else {
             const result = await response.json().catch(() => ({ message: 'Unknown server error.' }));
@@ -525,7 +530,7 @@ try {
         }
     } catch (error) {
         console.error("API Error during tag save:", error);
-        alertMessage('Could not connect to the API server. Check Nginx configuration.', 'bg-red-500');
+        alertMessage('Could not connect to the API server. Check configuration.', 'bg-red-500');
     }
 }
     
@@ -534,22 +539,22 @@ window.deleteTag = async function(event, tagToDelete) {
     if (!activeImage) return;
 
     try {
-        // Actual DELETE request for a tag
+        // Calculate the new tags array and send it to the API
+        const updatedTags = (activeImage.tags || []).filter(t => t !== tagToDelete);
+        
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
-            method: 'DELETE',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tag: tagToDelete, user_id: CURRENT_USER_ID }) 
+            body: JSON.stringify({ tags: updatedTags })
         });
 
         if (response.ok) {
             // Update local state (activeImage and ALL_IMAGES)
-            const updatedTags = (activeImage.tags || []).filter(t => t !== tagToDelete);
             activeImage.tags = updatedTags;
             updateLocalImage(activeImage.image_id, { tags: updatedTags });
 
             // Update UI
             renderModalTags();
-            // *** UPDATED SUCCESS MESSAGE ***
             alertMessage(`Tag '${tagToDelete}' removed successfully.`, 'bg-green-600');
         } else {
             const result = await response.json().catch(() => ({ message: 'Unknown server error.' }));
@@ -557,7 +562,7 @@ window.deleteTag = async function(event, tagToDelete) {
         }
     } catch (error) {
         console.error("API Error during tag deletion:", error);
-        alertMessage('Could not connect to the API server or delete tag. Check Nginx configuration.', 'bg-red-500');
+        alertMessage('Could not connect to the API server or delete tag. Check configuration.', 'bg-red-500');
     }
 }
 
@@ -571,7 +576,7 @@ window.saveDescription = async function() {
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/description`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ description: newDesc, user_id: CURRENT_USER_ID }) 
+            body: JSON.stringify({ description: newDesc })
         });
 
         if (response.ok) {

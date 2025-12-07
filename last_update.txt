@@ -1,0 +1,55 @@
+Perfect! Now let me create a summary document of all the fixes:
+Summary of Fixes
+I've fixed the issues preventing your database writes from working. Here's what was wrong and what I changed:
+🔧 Issues Fixed
+1. CORS Preflight Handling
+- Problem: The browser was sending OPTIONS requests (CORS preflight), but Flask wasn't configured to handle them properly
+- Fix: Updated CORS configuration in api_server.py to explicitly allow OPTIONS method and all necessary headers
+2. Frontend/Backend API Mismatch  
+- Problem: Frontend was sending { tag: "tagname" } but backend expected { tags: ["tag1", "tag2"] }
+- Fix: Updated saveTag() and deleteTag() functions in image_gallery.html to:
+  - Calculate the full updated tags array
+  - Send the complete array to the backend
+  - Changed DELETE method to POST (since backend doesn't have a DELETE endpoint)
+3. Added Debug Logging
+- Added print statements to track requests in the API server console
+- This will help you see when requests arrive and what data is being processed
+📝 Files Modified
+1. api_server.py:
+   - Enhanced CORS configuration with explicit OPTIONS support
+   - Added debug logging to track requests
+   - Removed i.date references (already done)
+2. image_gallery.html:
+   - Fixed saveTag() to send full tags array
+   - Fixed deleteTag() to send full tags array and use POST
+   - Removed unnecessary user_id from requests
+3. test_api.py (NEW):
+   - Created test script to verify all API endpoints work
+   - Tests list, get, update description, and update tags
+🚀 How to Test
+1. Start the API server (watch the console for debug output):
+      python api_server.py
+   
+2. Option A - Run the test script:
+      pip install requests  # if not already installed
+   python test_api.py
+   
+3. Option B - Test with the frontend:
+   - Open image_gallery.html in your browser
+   - Try adding a tag - you should see in the API console:
+          [DEBUG] update_tags called with image_id: rollfilm/..., method: POST
+     [DEBUG] Received data: {'tags': ['tag1', 'tag2', 'newtag']}
+     [SUCCESS] Tags updated for image_id=..., count=3
+     
+4. Check PostgreSQL:
+      psql -U postgres -d imagearchive -c "SELECT * FROM tags;"
+   psql -U postgres -d imagearchive -c "SELECT * FROM image_tags LIMIT 10;"
+   
+🔍 Troubleshooting
+If it still doesn't work:
+1. Check the API server console - you should see [DEBUG] messages when requests come in
+2. Check browser console (F12) - look for any error messages
+3. Verify the API URL - make sure frontend is pointing to the right server (check API_BASE_URL in image_gallery.html)
+4. Check CORS - if you see CORS errors in browser, the server might not be running or firewall is blocking
+The database writes should now work! You'll see tags and descriptions persisted in PostgreSQL.
+▣  Build · claude-sonnet-4-5 · 2m 3s
