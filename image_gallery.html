@@ -27,6 +27,43 @@
             opacity: 0;
             transform: translateY(-20px);
         }
+        /* Multi-select styles */
+        .image-card.selectable {
+            cursor: pointer;
+            position: relative;
+        }
+        .image-card.selectable:hover {
+            opacity: 0.8;
+        }
+        .image-card.selected {
+            outline: 4px solid #4f46e5;
+            outline-offset: -4px;
+        }
+        .selection-checkbox {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            background: white;
+            border: 2px solid #4f46e5;
+            border-radius: 4px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+        }
+        .image-card.selectable .selection-checkbox {
+            display: flex;
+        }
+        .image-card.selected .selection-checkbox {
+            background: #4f46e5;
+        }
+        .selection-checkbox svg {
+            width: 16px;
+            height: 16px;
+            color: white;
+        }
     </style>
 </head>
 <body class="bg-gray-50 font-sans">
@@ -34,11 +71,49 @@
     <!-- Header -->
     <header class="bg-white shadow-sm sticky top-0 z-10">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-            <h1 class="text-2xl font-bold text-gray-900">
-                Shared Film Archive <span id="total-count" class="text-gray-400 text-base font-normal"></span>
-            </h1>
+            <div class="flex justify-between items-center">
+                <h1 class="text-2xl font-bold text-gray-900">
+                    Shared Film Archive <span id="total-count" class="text-gray-400 text-base font-normal"></span>
+                </h1>
+                <div id="auth-section">
+                    <button id="login-button" onclick="showLoginDialog()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+                        Login
+                    </button>
+                    <div id="user-info" class="hidden">
+                        <span class="text-gray-700 mr-3">Welcome, <span id="username-display" class="font-semibold"></span></span>
+                        <button onclick="logout()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                            Logout
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     </header>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <h2 class="text-2xl font-bold mb-6">Login</h2>
+            <form onsubmit="handleLogin(event)">
+                <div class="mb-4">
+                    <label for="username" class="block text-sm font-medium text-gray-700 mb-2">Username</label>
+                    <input type="text" id="username" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div class="mb-6">
+                    <label for="password" class="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                    <input type="password" id="password" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div class="flex space-x-3">
+                    <button type="submit" class="flex-1 px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+                        Login
+                    </button>
+                    <button type="button" onclick="hideLoginDialog()" class="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
@@ -75,9 +150,29 @@
             </div>
         </section>
 
+        <!-- Multi-select Toolbar (hidden by default) -->
+        <div id="multi-select-toolbar" class="bg-indigo-600 text-white p-4 rounded-xl shadow-lg mb-6 hidden">
+            <div class="flex justify-between items-center">
+                <div>
+                    <span id="selected-count" class="font-semibold">0 images selected</span>
+                </div>
+                <div class="flex space-x-3">
+                    <button onclick="bulkTagImages()" class="px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-indigo-50 transition font-medium">
+                        Add Tags to Selected
+                    </button>
+                    <button onclick="clearSelection()" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-700 rounded-lg transition">
+                        Clear Selection
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Gallery Results and Count -->
         <div class="flex justify-between items-center mb-6">
             <p id="result-count" class="text-sm font-medium text-gray-600">Loading initial images...</p>
+            <button id="select-mode-toggle" onclick="toggleSelectMode()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+                Select Multiple
+            </button>
         </div>
 
         <!-- Image Gallery Grid -->
@@ -176,7 +271,8 @@
 
     <script>
         // --- CONFIGURATION ---
-        const API_BASE_URL = 'http://172.16.8.26:5000/api/images'; // Base URL for metadata interaction
+        // Use relative URL to avoid mixed content issues with HTTPS
+        const API_BASE_URL = '/api/images'; // Base URL for metadata interaction
         const INITIAL_LOAD_COUNT = 10;
         const LOAD_BATCH_COUNT = 10;
         const CURRENT_USER_ID = 'user-001-collaborator'; // Simulated logged-in user ID
@@ -186,6 +282,11 @@
         let filteredImages = []; // Images matching current search/filter criteria
         let imagesRenderedCount = 0; // Tracks how many images are currently displayed
         let activeImage = null; // The image currently open in the modal
+        let selectMode = false; // Multi-select mode
+        let selectedImages = new Set(); // Set of selected image_ids
+        let isLoggedIn = false; // User authentication state
+        let currentUsername = null; // Current logged in username
+        let authToken = null; // Authentication token
         
         // --- ELEMENTS (Assigned in init) ---
         let galleryElement, searchInput, typeFilter, resultCountElement, noResultsElement, loadingIndicatorElement, loadMoreButton, popularTagsContainer, totalCountElement;
@@ -258,19 +359,36 @@
         
         function renderImageCard(image) {
             const card = document.createElement('div');
-            card.className = 'bg-white rounded-xl shadow-md hover:shadow-xl transition duration-300 cursor-pointer overflow-hidden transform hover:scale-[1.02]';
-            card.onclick = () => openModal(image);
+            const isSelected = selectedImages.has(image.image_id);
+            
+            card.className = 'image-card bg-white rounded-xl shadow-md hover:shadow-xl transition duration-300 cursor-pointer overflow-hidden transform hover:scale-[1.02]';
+            if (selectMode) {
+                card.classList.add('selectable');
+                if (isSelected) card.classList.add('selected');
+            }
+            
+            card.onclick = (e) => {
+                if (selectMode) {
+                    e.stopPropagation();
+                    toggleImageSelection(image.image_id, card);
+                } else {
+                    openModal(image);
+                }
+            };
 
             const title = image.filename_base || image.image_id.split('/').pop();
             const webUrl = filePathToWebUrl(image.thumbnail_path);
+            
+            const checkboxIcon = isSelected ? '<svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : '';
 
             card.innerHTML = `
-                <div class="aspect-[3/2]">
+                <div class="aspect-[3/2] relative">
                     <img src="${webUrl}" 
                          alt="${title}" 
                          class="w-full h-full object-cover"
                          onerror="this.onerror=null; this.src='https://placehold.co/600x400/6b7280/ffffff?text=Image+Unavailable';"
                     >
+                    <div class="selection-checkbox">${checkboxIcon}</div>
                 </div>
                 <div class="p-3">
                     <h3 class="text-sm font-semibold text-gray-800 truncate">${title}</h3>
@@ -385,8 +503,9 @@
             galleryElement.innerHTML = '';
             imagesRenderedCount = 0;
             
-            // 3. Render the first batch of results
-            renderGalleryBatch(INITIAL_LOAD_COUNT, false);
+            // 3. Render results - show all if less than 100, otherwise batch
+            const initialBatchSize = filteredImages.length < 100 ? filteredImages.length : INITIAL_LOAD_COUNT;
+            renderGalleryBatch(initialBatchSize, false);
         }
 
         // Render top 20 popular tags for quick access
@@ -488,7 +607,9 @@
         }
 
         window.saveTag = async function() {
+            if (!requireAuth('add tags')) return;
             if (!activeImage) return;
+            
             const tagInput = document.getElementById('new-tag');
             const newTag = tagInput.value.trim().toLowerCase(); // Normalize tag
             
@@ -509,9 +630,14 @@ try {
         // Calculate the new tags array and send it to the API
         const updatedTags = [...(activeImage.tags || []), newTag].sort();
         
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+        }
+        
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify({ tags: updatedTags })
         });
 
@@ -536,15 +662,21 @@ try {
     
 window.deleteTag = async function(event, tagToDelete) {
     event.stopPropagation();
+    if (!requireAuth('delete tags')) return;
     if (!activeImage) return;
 
     try {
         // Calculate the new tags array and send it to the API
         const updatedTags = (activeImage.tags || []).filter(t => t !== tagToDelete);
         
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+        }
+        
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify({ tags: updatedTags })
         });
 
@@ -567,15 +699,21 @@ window.deleteTag = async function(event, tagToDelete) {
 }
 
 window.saveDescription = async function() {
+    if (!requireAuth('save descriptions')) return;
     if (!activeImage) return;
     const descInput = document.getElementById('description-input');
     const newDesc = descInput.value.trim();
     
     try {
         // Actual PUT request for description
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+        }
+        
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/description`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify({ description: newDesc })
         });
 
@@ -594,6 +732,247 @@ window.saveDescription = async function() {
         alertMessage('Could not connect to the API server. Check Nginx configuration.', 'bg-red-500');
     }
 }
+
+        // --- AUTHENTICATION FUNCTIONS ---
+
+        function checkStoredAuth() {
+            const storedToken = localStorage.getItem('authToken');
+            const storedUsername = localStorage.getItem('username');
+            
+            if (storedToken && storedUsername) {
+                authToken = storedToken;
+                currentUsername = storedUsername;
+                isLoggedIn = true;
+                updateAuthUI();
+            }
+        }
+
+        function updateAuthUI() {
+            const loginButton = document.getElementById('login-button');
+            const userInfo = document.getElementById('user-info');
+            const usernameDisplay = document.getElementById('username-display');
+            
+            if (isLoggedIn) {
+                loginButton.classList.add('hidden');
+                userInfo.classList.remove('hidden');
+                usernameDisplay.textContent = currentUsername;
+                
+                // Show write-enabled UI elements
+                document.querySelectorAll('.auth-required').forEach(el => {
+                    el.classList.remove('hidden');
+                });
+            } else {
+                loginButton.classList.remove('hidden');
+                userInfo.classList.add('hidden');
+                
+                // Hide write-enabled UI elements
+                document.querySelectorAll('.auth-required').forEach(el => {
+                    el.classList.add('hidden');
+                });
+            }
+        }
+
+        window.showLoginDialog = function() {
+            document.getElementById('login-modal').classList.remove('hidden');
+        };
+
+        window.hideLoginDialog = function() {
+            document.getElementById('login-modal').classList.add('hidden');
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+        };
+
+        window.handleLogin = async function(event) {
+            event.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    authToken = data.token;
+                    currentUsername = username;
+                    isLoggedIn = true;
+                    
+                    localStorage.setItem('authToken', authToken);
+                    localStorage.setItem('username', username);
+                    
+                    updateAuthUI();
+                    hideLoginDialog();
+                    alertMessage('Login successful!', 'bg-green-600');
+                } else {
+                    const error = await response.json();
+                    alertMessage(error.message || 'Login failed', 'bg-red-500');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alertMessage('Could not connect to server', 'bg-red-500');
+            }
+        };
+
+        window.logout = function() {
+            isLoggedIn = false;
+            currentUsername = null;
+            authToken = null;
+            
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('username');
+            
+            updateAuthUI();
+            clearSelection();
+            alertMessage('Logged out successfully', 'bg-green-600');
+        };
+
+        function requireAuth(actionName) {
+            if (!isLoggedIn) {
+                alertMessage(`Please log in to ${actionName}`, 'bg-yellow-500');
+                return false;
+            }
+            return true;
+        }
+
+        // --- MULTI-SELECT FUNCTIONS ---
+
+        window.toggleSelectMode = function() {
+            selectMode = !selectMode;
+            const button = document.getElementById('select-mode-toggle');
+            
+            if (selectMode) {
+                button.textContent = 'Exit Select Mode';
+                button.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                button.classList.add('bg-red-600', 'hover:bg-red-700');
+            } else {
+                button.textContent = 'Select Multiple';
+                button.classList.remove('bg-red-600', 'hover:bg-red-700');
+                button.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+                clearSelection();
+            }
+            
+            // Re-render gallery to update card styles
+            const currentQuery = searchInput.value;
+            const currentType = typeFilter.value;
+            if (currentQuery || currentType) {
+                filterImages();
+            } else {
+                showRandomBatch();
+            }
+        };
+
+        function toggleImageSelection(imageId, cardElement) {
+            if (selectedImages.has(imageId)) {
+                selectedImages.delete(imageId);
+                cardElement.classList.remove('selected');
+                const checkbox = cardElement.querySelector('.selection-checkbox');
+                checkbox.innerHTML = '';
+            } else {
+                selectedImages.add(imageId);
+                cardElement.classList.add('selected');
+                const checkbox = cardElement.querySelector('.selection-checkbox');
+                checkbox.innerHTML = '<svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>';
+            }
+            
+            updateMultiSelectToolbar();
+        }
+
+        function updateMultiSelectToolbar() {
+            const toolbar = document.getElementById('multi-select-toolbar');
+            const countElement = document.getElementById('selected-count');
+            
+            if (selectedImages.size > 0) {
+                toolbar.classList.remove('hidden');
+                countElement.textContent = `${selectedImages.size} image${selectedImages.size > 1 ? 's' : ''} selected`;
+            } else {
+                toolbar.classList.add('hidden');
+            }
+        }
+
+        window.clearSelection = function() {
+            selectedImages.clear();
+            updateMultiSelectToolbar();
+            
+            // Re-render to remove selection styling
+            const currentQuery = searchInput.value;
+            const currentType = typeFilter.value;
+            if (currentQuery || currentType) {
+                filterImages();
+            } else {
+                showRandomBatch();
+            }
+        };
+
+        window.bulkTagImages = async function() {
+            if (selectedImages.size === 0) {
+                alertMessage('No images selected', 'bg-yellow-500');
+                return;
+            }
+
+            if (!isLoggedIn) {
+                alertMessage('Please log in to add tags', 'bg-red-500');
+                return;
+            }
+
+            const newTags = prompt(`Enter tags to add to ${selectedImages.size} selected image(s) (comma-separated):`);
+            if (!newTags) return;
+
+            const tagsArray = newTags.split(',').map(tag => tag.trim().toLowerCase()).filter(tag => tag);
+            
+            if (tagsArray.length === 0) {
+                alertMessage('No valid tags entered', 'bg-yellow-500');
+                return;
+            }
+
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const imageId of selectedImages) {
+                try {
+                    const image = ALL_IMAGES.find(img => img.image_id === imageId);
+                    if (!image) continue;
+
+                    // Merge existing tags with new tags
+                    const existingTags = Array.isArray(image.tags) ? image.tags : [];
+                    const mergedTags = [...new Set([...existingTags, ...tagsArray])].sort();
+
+                    const headers = { 'Content-Type': 'application/json' };
+                    if (authToken) {
+                        headers['Authorization'] = `Bearer ${authToken}`;
+                    }
+                    
+                    const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(imageId)}/tags`, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify({ tags: mergedTags })
+                    });
+
+                    if (response.ok) {
+                        updateLocalImage(imageId, { tags: mergedTags });
+                        successCount++;
+                    } else {
+                        errorCount++;
+                    }
+                } catch (error) {
+                    console.error(`Error tagging image ${imageId}:`, error);
+                    errorCount++;
+                }
+            }
+
+            if (errorCount === 0) {
+                alertMessage(`Successfully added tags to ${successCount} image(s)`, 'bg-green-600');
+            } else {
+                alertMessage(`Tagged ${successCount} images, ${errorCount} failed`, 'bg-yellow-500');
+            }
+
+            clearSelection();
+            renderPopularTags();
+        };
+
         // --- INITIALIZATION ---
         
         async function init() {
@@ -608,10 +987,13 @@ window.saveDescription = async function() {
             popularTagsContainer = document.getElementById('popular-tags-container');
             totalCountElement = document.getElementById('total-count');
 
-            // 1. Load Data
+            // 1. Check stored authentication
+            checkStoredAuth();
+            
+            // 2. Load Data
             await loadData();
             
-            // 2. Attach event listeners
+            // 3. Attach event listeners
             searchInput.addEventListener('input', filterImages);
             typeFilter.addEventListener('change', filterImages);
             
@@ -623,7 +1005,7 @@ window.saveDescription = async function() {
                 }
             });
 
-            // 3. Initial render
+            // 4. Initial render
             loadingIndicatorElement.classList.add('hidden');
             totalCountElement.textContent = `(${ALL_IMAGES.length})`; // Display total count
             

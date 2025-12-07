@@ -1,9 +1,12 @@
 import os
 import json
+import secrets
+import hashlib
 import psycopg2
 import psycopg2.extras # REQUIRED for RealDictCursor
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from functools import wraps
 
 # --- IMPORTANT: CONFIGURE YOUR DATABASE CONNECTION HERE ---
 DB_CONFIG = {
@@ -13,6 +16,16 @@ DB_CONFIG = {
     'host': 'localhost', # Or the IP of your PostgreSQL server
     'port': '5432'
 }
+
+# Simple user credentials (in production, use database with hashed passwords)
+USERS = {
+    'admin': hashlib.sha256('admin123'.encode()).hexdigest(),  # Change this password!
+    'user1': hashlib.sha256('password1'.encode()).hexdigest()  # Change this password!
+}
+
+# Store active tokens (in production, use database or Redis)
+active_tokens = {}
+
 # ---------------------------------------------------------
 
 app = Flask(__name__)
@@ -36,6 +49,75 @@ def get_db_connection():
     except Exception as e:
         print(f"Database connection error: {e}")
         return None
+
+def require_auth(f):
+    """Decorator to require authentication for routes."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({"success": False, "message": "Authentication required"}), 401
+        
+        token = auth_header.split(' ')[1]
+        
+        if token not in active_tokens:
+            return jsonify({"success": False, "message": "Invalid or expired token"}), 401
+        
+        return f(*args, **kwargs)
+    
+    return decorated_function
+
+# =======================================================================
+# AUTHENTICATION ENDPOINTS
+# =======================================================================
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Authenticate user and return token."""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({"success": False, "message": "Username and password required"}), 400
+        
+        # Hash the provided password
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        # Check credentials
+        if username in USERS and USERS[username] == password_hash:
+            # Generate token
+            token = secrets.token_urlsafe(32)
+            active_tokens[token] = username
+            
+            print(f"[AUTH] User '{username}' logged in successfully")
+            return jsonify({"success": True, "token": token, "username": username}), 200
+        else:
+            print(f"[AUTH] Failed login attempt for username: {username}")
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+            
+    except Exception as e:
+        print(f"[ERROR] Login error: {e}")
+        return jsonify({"success": False, "message": "Internal server error"}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """Logout user and invalidate token."""
+    try:
+        auth_header = request.headers.get('Authorization')
+        
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            if token in active_tokens:
+                username = active_tokens[token]
+                del active_tokens[token]
+                print(f"[AUTH] User '{username}' logged out")
+        
+        return jsonify({"success": True, "message": "Logged out successfully"}), 200
+    except Exception as e:
+        print(f"[ERROR] Logout error: {e}")
+        return jsonify({"success": False, "message": "Internal server error"}), 500
 
 # =======================================================================
 # 1. READ/GET ENDPOINT (Fixes tags disappearing on reload)
@@ -94,6 +176,7 @@ def get_image_details(image_id):
 # 2. WRITE/PUT/POST ENDPOINT (Fixes 405 Method Not Allowed)
 # =======================================================================
 @app.route('/api/images/<path:image_id>/tags', methods=['PUT', 'POST'])
+@require_auth
 def update_tags(image_id):
     """
     Replaces all existing tags for a specific image_id (the path string) with a new list of tags.
@@ -208,6 +291,7 @@ def list_images():
             conn.close()
 
 @app.route('/api/images/<path:image_id>/description', methods=['PUT'])
+@require_auth
 def update_description(image_id):
     """Updates the description field for a specific image_id."""
     print(f"[DEBUG] update_description called with image_id: {image_id}")

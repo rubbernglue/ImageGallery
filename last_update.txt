@@ -1,55 +1,107 @@
-Perfect! Now let me create a summary document of all the fixes:
-Summary of Fixes
-I've fixed the issues preventing your database writes from working. Here's what was wrong and what I changed:
-🔧 Issues Fixed
-1. CORS Preflight Handling
-- Problem: The browser was sending OPTIONS requests (CORS preflight), but Flask wasn't configured to handle them properly
-- Fix: Updated CORS configuration in api_server.py to explicitly allow OPTIONS method and all necessary headers
-2. Frontend/Backend API Mismatch  
-- Problem: Frontend was sending { tag: "tagname" } but backend expected { tags: ["tag1", "tag2"] }
-- Fix: Updated saveTag() and deleteTag() functions in image_gallery.html to:
-  - Calculate the full updated tags array
-  - Send the complete array to the backend
-  - Changed DELETE method to POST (since backend doesn't have a DELETE endpoint)
-3. Added Debug Logging
-- Added print statements to track requests in the API server console
-- This will help you see when requests arrive and what data is being processed
-📝 Files Modified
-1. api_server.py:
-   - Enhanced CORS configuration with explicit OPTIONS support
-   - Added debug logging to track requests
-   - Removed i.date references (already done)
-2. image_gallery.html:
-   - Fixed saveTag() to send full tags array
-   - Fixed deleteTag() to send full tags array and use POST
-   - Removed unnecessary user_id from requests
-3. test_api.py (NEW):
-   - Created test script to verify all API endpoints work
-   - Tests list, get, update description, and update tags
-🚀 How to Test
-1. Start the API server (watch the console for debug output):
-      python api_server.py
-   
-2. Option A - Run the test script:
-      pip install requests  # if not already installed
-   python test_api.py
-   
-3. Option B - Test with the frontend:
-   - Open image_gallery.html in your browser
-   - Try adding a tag - you should see in the API console:
-          [DEBUG] update_tags called with image_id: rollfilm/..., method: POST
-     [DEBUG] Received data: {'tags': ['tag1', 'tag2', 'newtag']}
-     [SUCCESS] Tags updated for image_id=..., count=3
-     
-4. Check PostgreSQL:
-      psql -U postgres -d imagearchive -c "SELECT * FROM tags;"
-   psql -U postgres -d imagearchive -c "SELECT * FROM image_tags LIMIT 10;"
-   
-🔍 Troubleshooting
-If it still doesn't work:
-1. Check the API server console - you should see [DEBUG] messages when requests come in
-2. Check browser console (F12) - look for any error messages
-3. Verify the API URL - make sure frontend is pointing to the right server (check API_BASE_URL in image_gallery.html)
-4. Check CORS - if you see CORS errors in browser, the server might not be running or firewall is blocking
-The database writes should now work! You'll see tags and descriptions persisted in PostgreSQL.
-▣  Build · claude-sonnet-4-5 · 2m 3s
+Summary
+I've successfully implemented all the requested features! Here's what's been added:
+✅ 1. Fixed Mixed Content Issue (HTTPS)
+- Changed API_BASE_URL to use relative URL (/api/images instead of http://172.16.8.26:5000/api/images)
+- Updated nginx config to properly forward HTTPS scheme with X-Forwarded-Proto
+- Result: No more "Blocked loading mixed active content" errors when browsing through HTTPS proxy
+✅ 2. Show All Search Results if < 100
+- Modified filterImages() function to automatically display all results when count is less than 100
+- Code: const initialBatchSize = filteredImages.length < 100 ? filteredImages.length : INITIAL_LOAD_COUNT;
+- Result: Better user experience for filtered searches
+✅ 3. Tags Now Searchable
+- Already working - tags were already included in the search string
+- Confirmed in line 374 of image_gallery.html: search includes tags in the searchString
+✅ 4. User Authentication System
+Frontend Features:
+- Login/Logout button in header
+- Login modal dialog with username/password
+- Authentication state persisted in localStorage
+- Auth token sent with all write operations (tags, descriptions)
+- UI elements disabled for non-logged in users
+Backend Features:
+- /api/auth/login endpoint for authentication
+- /api/auth/logout endpoint
+- Token-based authentication using Bearer tokens
+- @require_auth decorator protects write endpoints
+- Default users configured (see below for credentials)
+Default Credentials (⚠️ CHANGE THESE):
+- Username: admin / Password: admin123
+- Username: user1 / Password: password1
+✅ 5. Multi-Image Selection and Bulk Tagging
+New UI Elements:
+- "Select Multiple" button to enter selection mode
+- Visual selection with checkboxes and blue outline
+- Multi-select toolbar showing selected count
+- "Add Tags to Selected" button
+- "Clear Selection" button
+Functionality:
+- Click images to select/deselect in selection mode
+- Bulk add tags to multiple images at once
+- Requires authentication to use
+- Progress feedback with success/error counts
+✅ 6. Updated Nginx Configuration
+- Improved proxy headers for HTTPS
+- Cache bypass for POST/PUT/DELETE requests (only cache GET)
+- Reduced cache time from 10m to 5m for fresher data
+- Added X-Forwarded-Host and X-Forwarded-Port headers
+📁 Files Modified
+1. image_gallery.html (1026 lines)
+   - Added authentication UI and logic
+   - Added multi-select mode UI
+   - Updated API calls to include auth tokens
+   - Enhanced search behavior
+2. api_server.py (339 lines)
+   - Added authentication endpoints
+   - Added @require_auth decorator
+   - Protected write endpoints (tags, descriptions)
+   - Added token management
+3. nginx_imagearchive.conf (80 lines)
+   - Improved HTTPS proxy configuration
+   - Better cache control for write operations
+🚀 How to Use
+1. Restart the API Server:
+python api_server.py
+2. Reload Nginx Configuration:
+sudo nginx -t  # Test configuration
+sudo nginx -s reload  # Reload if test passes
+3. Access the Site:
+- Browse as guest (read-only)
+- Click "Login" button
+- Use credentials: admin / admin123
+- Now you can:
+  - Add/remove tags
+  - Edit descriptions
+  - Use multi-select mode to bulk-tag images
+4. Multi-Select Workflow:
+- Click "Select Multiple" button
+- Click on images to select them (blue outline appears)
+- Click "Add Tags to Selected"
+- Enter comma-separated tags
+- Tags are added to all selected images
+🔒 Security Notes
+⚠️ Important - Change Default Passwords!
+Edit /home/johan/src/ImageArchive/api_server.py lines 18-22:
+USERS = {
+    'admin': hashlib.sha256('YOUR_SECURE_PASSWORD'.encode()).hexdigest(),
+    'user1': hashlib.sha256('ANOTHER_PASSWORD'.encode()).hexdigest()
+}
+For Production:
+- Move user credentials to database with proper password hashing
+- Use environment variables for sensitive data
+- Implement token expiration
+- Add HTTPS certificate validation
+- Consider using established auth solutions (OAuth, JWT)
+🎨 New Features in Action
+Read-Only Mode (Not Logged In):
+- Browse all images
+- Search and filter
+- View tags and descriptions
+- Click tags to search
+- ❌ Cannot edit anything
+Logged In Mode:
+- ✅ All read-only features
+- ✅ Add/remove tags on single images
+- ✅ Edit descriptions
+- ✅ Select multiple images
+- ✅ Bulk add tags to selected images
+All features are now fully implemented and ready to use!
