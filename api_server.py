@@ -2,6 +2,8 @@ import os
 import json
 import secrets
 import hashlib
+import hmac
+import time
 import psycopg2
 import psycopg2.extras # REQUIRED for RealDictCursor
 from flask import Flask, request, jsonify
@@ -17,16 +19,70 @@ DB_CONFIG = {
     'port': '5432'
 }
 
-# Simple user credentials (in production, use database with hashed passwords)
+# Secret key for password hashing - CHANGE THIS TO A RANDOM VALUE!
+# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY = 'change_this_to_a_random_secret_key_generated_above'
+
+# ============================================================================
+# User credentials with salted hashed passwords
+# ============================================================================
+# To add a new user:
+# 1. Run: python generate_password_hash.py
+# 2. Enter username and password when prompted
+# 3. Copy the entire dictionary entry (including the username line)
+# 4. Paste it into the USERS dictionary below
+#
+# EXAMPLE OUTPUT from generate_password_hash.py:
+#     'myusername': {
+#         'salt': 'a1b2c3d4e5f6...',
+#         'hash': '1234567890abcdef...'
+#     },
+#
+# The script generates both the salt AND the hash for you!
+# Just copy-paste the entire block including the username.
+# ============================================================================
+
 USERS = {
-    'admin': hashlib.sha256('admin123'.encode()).hexdigest(),  # Change this password!
-    'user1': hashlib.sha256('password1'.encode()).hexdigest()  # Change this password!
+    # Default admin user - password: 'admin123' - CHANGE THIS!
+    'admin': {
+        'salt': '8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d',
+        'hash': hashlib.pbkdf2_hmac('sha256', b'admin123', b'8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d', 100000).hex()
+    },
+    # Add more users below by running: python generate_password_hash.py
+    # Then copy-paste the output here:
+    
 }
 
-# Store active tokens (in production, use database or Redis)
-active_tokens = {}
+# Store active tokens with expiration (in production, use database or Redis)
+active_tokens = {}  # Format: {token: {'username': username, 'expires': timestamp}}
+
+# Token expiration time in seconds (24 hours)
+TOKEN_EXPIRATION = 86400
 
 # ---------------------------------------------------------
+
+def verify_password(username, password):
+    """Securely verify password using PBKDF2."""
+    if username not in USERS:
+        return False
+    
+    user_data = USERS[username]
+    salt = user_data['salt'].encode()
+    stored_hash = user_data['hash']
+    
+    # Hash the provided password with the same salt
+    password_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000).hex()
+    
+    # Use constant-time comparison to prevent timing attacks
+    return hmac.compare_digest(password_hash, stored_hash)
+
+def clean_expired_tokens():
+    """Remove expired tokens from memory."""
+    current_time = time.time()
+    expired = [token for token, data in active_tokens.items() 
+               if data['expires'] < current_time]
+    for token in expired:
+        del active_tokens[token]
 
 app = Flask(__name__)
 # Enable CORS for the frontend to communicate with this API
@@ -61,8 +117,15 @@ def require_auth(f):
         
         token = auth_header.split(' ')[1]
         
+        # Check if token exists and is not expired
         if token not in active_tokens:
             return jsonify({"success": False, "message": "Invalid or expired token"}), 401
+        
+        token_data = active_tokens[token]
+        if token_data['expires'] < time.time():
+            # Token expired, remove it
+            del active_tokens[token]
+            return jsonify({"success": False, "message": "Token expired, please log in again"}), 401
         
         return f(*args, **kwargs)
     
@@ -75,6 +138,9 @@ def require_auth(f):
 def login():
     """Authenticate user and return token."""
     try:
+        # Clean up expired tokens before processing login
+        clean_expired_tokens()
+        
         data = request.get_json()
         username = data.get('username')
         password = data.get('password')
@@ -82,17 +148,24 @@ def login():
         if not username or not password:
             return jsonify({"success": False, "message": "Username and password required"}), 400
         
-        # Hash the provided password
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        
-        # Check credentials
-        if username in USERS and USERS[username] == password_hash:
-            # Generate token
+        # Verify credentials using secure password verification
+        if verify_password(username, password):
+            # Generate secure token
             token = secrets.token_urlsafe(32)
-            active_tokens[token] = username
             
-            print(f"[AUTH] User '{username}' logged in successfully")
-            return jsonify({"success": True, "token": token, "username": username}), 200
+            # Store token with expiration time
+            active_tokens[token] = {
+                'username': username,
+                'expires': time.time() + TOKEN_EXPIRATION
+            }
+            
+            print(f"[AUTH] User '{username}' logged in successfully (token expires in {TOKEN_EXPIRATION/3600:.1f} hours)")
+            return jsonify({
+                "success": True, 
+                "token": token, 
+                "username": username,
+                "expires_in": TOKEN_EXPIRATION
+            }), 200
         else:
             print(f"[AUTH] Failed login attempt for username: {username}")
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
@@ -110,7 +183,7 @@ def logout():
         if auth_header and auth_header.startswith('Bearer '):
             token = auth_header.split(' ')[1]
             if token in active_tokens:
-                username = active_tokens[token]
+                username = active_tokens[token]['username']
                 del active_tokens[token]
                 print(f"[AUTH] User '{username}' logged out")
         
@@ -266,6 +339,14 @@ def list_images():
                     i.thumbnail_path,
                     i.highres_path,
                     i.description,
+                    i.camera_make,
+                    i.camera_model,
+                    i.lens_model,
+                    i.focal_length,
+                    i.aperture,
+                    i.shutter_speed,
+                    i.iso,
+                    i.date_taken,
                     COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}') AS tags
                 FROM 
                     images i
@@ -275,7 +356,9 @@ def list_images():
                     tags t ON it.tag_id = t.id
                 GROUP BY 
                     i.id, i.image_id, i.film_type, i.batch_info, i.filename_base, 
-                    i.film_stock, i.thumbnail_path, i.highres_path, i.description
+                    i.film_stock, i.thumbnail_path, i.highres_path, i.description,
+                    i.camera_make, i.camera_model, i.lens_model, i.focal_length,
+                    i.aperture, i.shutter_speed, i.iso, i.date_taken
                 ORDER BY i.id;
             """
             cur.execute(sql_query)

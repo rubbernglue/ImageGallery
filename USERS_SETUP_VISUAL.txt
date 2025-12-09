@@ -1,0 +1,178 @@
+================================================================================
+                    HOW TO ADD A USER - VISUAL GUIDE
+================================================================================
+
+STEP 1: Run the password generator
+───────────────────────────────────────────────────────────────────────────────
+
+    $ python generate_password_hash.py
+
+    Enter username: johan                    ← Type your username
+    Enter password: ********                 ← Type your password (hidden)
+    Confirm password: ********               ← Type it again
+
+
+STEP 2: The script outputs THIS (example):
+───────────────────────────────────────────────────────────────────────────────
+
+    === Generated Password Hash ===
+
+    Add this to api_server.py USERS dictionary:
+
+    'johan': {                               ← Copy from here (including 'johan')
+        'salt': 'a1b2c3d4e5f6...',          ← This is the salt
+        'hash': '1234567890ab...'            ← This is the hash
+    },                                       ← Copy to here (including comma)
+
+
+STEP 3: Open api_server.py and find this section (around line 29):
+───────────────────────────────────────────────────────────────────────────────
+
+BEFORE:
+    USERS = {
+        'admin': {
+            'salt': '8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d',
+            'hash': hashlib.pbkdf2_hmac('sha256', b'admin123', b'8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d', 100000).hex()
+        },
+        # Add more users below:
+        
+    }
+
+
+STEP 4: Paste your copied text AFTER the comment:
+───────────────────────────────────────────────────────────────────────────────
+
+AFTER:
+    USERS = {
+        'admin': {
+            'salt': '8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d',
+            'hash': hashlib.pbkdf2_hmac('sha256', b'admin123', b'8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d', 100000).hex()
+        },
+        # Add more users below:
+        'johan': {                               ← PASTE YOUR OUTPUT HERE
+            'salt': 'a1b2c3d4e5f6...',
+            'hash': '1234567890ab...'
+        },
+    }
+              ↑
+              Make sure there's a comma here after the closing brace
+
+
+STEP 5: Save the file and restart the API server
+───────────────────────────────────────────────────────────────────────────────
+
+    Press Ctrl+C to stop the current server
+    python api_server.py
+
+
+STEP 6: Test login
+───────────────────────────────────────────────────────────────────────────────
+
+    Open the website
+    Click "Login"
+    Username: johan              ← The username you entered in Step 1
+    Password: [your password]    ← The password you entered in Step 1
+    Click "Login"
+
+
+================================================================================
+                        COMMON MISTAKES TO AVOID
+================================================================================
+
+❌ WRONG: Only copying the salt or hash values
+   'admin': {
+       'salt': 'a1b2c3d4e5f6...',    ← Don't just replace these values
+       'hash': '1234567890ab...'      ← Don't just replace these values
+   },
+
+✅ RIGHT: Copy the ENTIRE block including the username line
+   'johan': {                         ← Copy the whole thing
+       'salt': 'a1b2c3d4e5f6...',
+       'hash': '1234567890ab...'
+   },
+
+
+❌ WRONG: Forgetting the comma at the end
+   'johan': {
+       'salt': 'a1b2c3d4e5f6...',
+       'hash': '1234567890ab...'
+   }                                  ← Missing comma causes Python error
+
+
+✅ RIGHT: Include the comma
+   'johan': {
+       'salt': 'a1b2c3d4e5f6...',
+       'hash': '1234567890ab...'
+   },                                 ← Comma is here
+
+
+❌ WRONG: Not restarting the server after changes
+   Changes to api_server.py don't take effect until you restart
+
+✅ RIGHT: Always restart after editing api_server.py
+   Ctrl+C to stop, then: python api_server.py
+
+
+================================================================================
+                      WHAT IF YOU MADE A MISTAKE?
+================================================================================
+
+If login doesn't work:
+
+1. Check the username is typed EXACTLY as in api_server.py (case-sensitive)
+   'Johan' is different from 'johan'
+
+2. Make sure you restarted the API server
+
+3. Check api_server.py has no syntax errors:
+   python3 -c "import api_server"
+   (Should show no errors)
+
+4. Try the default admin account first to verify the system works:
+   Username: admin
+   Password: admin123
+
+5. If admin works but your new account doesn't, there's likely a copy-paste
+   error in the USERS dictionary
+
+================================================================================
+                           FULL WORKING EXAMPLE
+================================================================================
+
+Let's create user "photouser" with password "MyPass2024":
+
+1. Generate:
+   $ python generate_password_hash.py
+   Enter username: photouser
+   Enter password: MyPass2024
+   Confirm password: MyPass2024
+
+2. Output received:
+   'photouser': {
+       'salt': 'f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8',
+       'hash': 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2'
+   },
+
+3. api_server.py becomes:
+   USERS = {
+       'admin': {
+           'salt': '8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d',
+           'hash': hashlib.pbkdf2_hmac('sha256', b'admin123', b'8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d', 100000).hex()
+       },
+       'photouser': {
+           'salt': 'f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8',
+           'hash': 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2'
+       },
+   }
+
+4. Restart server:
+   Ctrl+C
+   python api_server.py
+
+5. Login:
+   Username: photouser
+   Password: MyPass2024
+
+DONE! ✓
+
+================================================================================

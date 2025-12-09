@@ -1,6 +1,9 @@
 import os
 import re
 import json
+from PIL import Image
+from PIL.ExifTags import TAGS
+from datetime import datetime
 
 # IMPORTANT: SET THIS TO YOUR ACTUAL ROOT DIRECTORY CONTAINING 'rollfilm' and 'sheetfilm'
 # Based on your console output, we'll use /opt/media as a placeholder.
@@ -9,6 +12,47 @@ BASE_DIR = '/opt/media'
 
 # Define the expected root folders to simplify parsing
 ROOT_FILM_TYPES = ['rollfilm', 'sheetfilm']
+
+def extract_exif(image_path):
+    """Extract EXIF data from an image file."""
+    try:
+        img = Image.open(image_path)
+        exif_data = img._getexif()
+        
+        if not exif_data:
+            return None
+        
+        # Convert EXIF tags to readable names
+        exif = {}
+        for tag_id, value in exif_data.items():
+            tag = TAGS.get(tag_id, tag_id)
+            exif[tag] = value
+        
+        # Extract commonly needed fields
+        result = {
+            'camera_make': exif.get('Make', '').strip(),
+            'camera_model': exif.get('Model', '').strip(),
+            'lens_model': exif.get('LensModel', '').strip(),
+            'focal_length': str(exif.get('FocalLength', '')),
+            'aperture': f"f/{exif.get('FNumber', '')}" if exif.get('FNumber') else '',
+            'shutter_speed': str(exif.get('ExposureTime', '')),
+            'iso': str(exif.get('ISOSpeedRatings', '')),
+            'date_taken': None,
+            'full_exif': exif  # Store full EXIF for advanced use
+        }
+        
+        # Parse date taken
+        date_str = exif.get('DateTimeOriginal') or exif.get('DateTime')
+        if date_str:
+            try:
+                result['date_taken'] = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').isoformat()
+            except:
+                pass
+        
+        return result
+    except Exception as e:
+        print(f"  Warning: Could not extract EXIF from {image_path}: {e}")
+        return None
 
 def parse_path(full_path, base_dir):
     """
@@ -86,10 +130,26 @@ def scan_library(base_dir):
                         images[image_id]['thumbnail_path'] = full_path
                     elif data['resolution'] == '2560':
                         images[image_id]['highres_path'] = full_path
+                        # Extract EXIF from high-res image
+                        print(f"  Extracting EXIF from: {image_id}")
+                        exif = extract_exif(full_path)
+                        if exif:
+                            images[image_id].update({
+                                'camera_make': exif.get('camera_make', ''),
+                                'camera_model': exif.get('camera_model', ''),
+                                'lens_model': exif.get('lens_model', ''),
+                                'focal_length': exif.get('focal_length', ''),
+                                'aperture': exif.get('aperture', ''),
+                                'shutter_speed': exif.get('shutter_speed', ''),
+                                'iso': exif.get('iso', ''),
+                                'date_taken': exif.get('date_taken', ''),
+                                'exif_data': exif.get('full_exif', {})
+                            })
 
     # Convert the dictionary of images to a list, ensuring both paths were found
     final_data = [img for img in images.values() if img['thumbnail_path'] and img['highres_path']]
     print(f"Found {len(final_data)} unique image pairs (600px and 2560px).")
+    print(f"Extracted EXIF data from {sum(1 for img in final_data if img.get('camera_model'))} images.")
     return final_data
 
 def generate_sql_inserts(data):

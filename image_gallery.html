@@ -170,7 +170,7 @@
         <!-- Gallery Results and Count -->
         <div class="flex justify-between items-center mb-6">
             <p id="result-count" class="text-sm font-medium text-gray-600">Loading initial images...</p>
-            <button id="select-mode-toggle" onclick="toggleSelectMode()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+            <button id="select-mode-toggle" onclick="toggleSelectMode()" class="auth-required hidden px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
                 Select Multiple
             </button>
         </div>
@@ -234,27 +234,46 @@
                         <p class="text-gray-700"><strong class="font-medium text-gray-500">Type:</strong> <span id="modal-type"></span></p>
                         <p class="text-gray-700"><strong class="font-medium text-gray-500">Stock:</strong> <span id="modal-stock"></span></p>
                         <p class="text-gray-700"><strong class="font-medium text-gray-500">Batch:</strong> <span id="modal-batch"></span></p>
-                        <p class="text-gray-700 hidden"><strong class="font-medium text-gray-500">Thumb Path:</strong> <span id="modal-thumb-path"></span></p>
-                    </div>
-
-                    <!-- Description Editor -->
-                    <div>
-                        <label for="description-input" class="block text-sm font-medium text-gray-700 mb-1">Description (Editable)</label>
-                        <textarea id="description-input" rows="3"
-                                  class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"></textarea>
-                        <button onclick="saveDescription()"
-                                class="w-full mt-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition duration-150">
-                            Save Description
-                        </button>
                     </div>
                     
-                    <!-- Tag Editor -->
+                    <!-- EXIF Data Section -->
+                    <div id="exif-section" class="hidden">
+                        <h3 class="text-sm font-semibold text-gray-800 mb-2">Camera & Settings</h3>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            <p class="text-gray-700"><strong class="font-medium text-gray-500">Camera:</strong> <span id="exif-camera"></span></p>
+                            <p class="text-gray-700"><strong class="font-medium text-gray-500">Lens:</strong> <span id="exif-lens"></span></p>
+                            <p class="text-gray-700"><strong class="font-medium text-gray-500">Focal Length:</strong> <span id="exif-focal"></span></p>
+                            <p class="text-gray-700"><strong class="font-medium text-gray-500">Aperture:</strong> <span id="exif-aperture"></span></p>
+                            <p class="text-gray-700"><strong class="font-medium text-gray-500">Shutter:</strong> <span id="exif-shutter"></span></p>
+                            <p class="text-gray-700"><strong class="font-medium text-gray-500">ISO:</strong> <span id="exif-iso"></span></p>
+                        </div>
+                        <p class="text-gray-600 text-xs mt-2"><strong>Date Taken:</strong> <span id="exif-date"></span></p>
+                    </div>
+
+                    <!-- Description Display/Editor -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Tags (Collaborative)</label>
+                        <label for="description-display" class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <!-- Read-only description (shown when not logged in) -->
+                        <div id="description-display" class="auth-readonly p-2 border border-gray-200 rounded-lg bg-gray-50 min-h-[76px]"></div>
+                        <!-- Editable description (shown when logged in) -->
+                        <div class="auth-required hidden">
+                            <textarea id="description-input" rows="3"
+                                      class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                            <button onclick="saveDescription()"
+                                    class="w-full mt-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition duration-150">
+                                Save Description
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Tag Display/Editor -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Tags</label>
                         <div id="modal-tags" class="flex flex-wrap gap-2 mb-3">
                             <!-- Tags are rendered here -->
                         </div>
-                        <div class="flex space-x-2">
+                        <!-- Tag input (only shown when logged in) -->
+                        <div class="auth-required hidden flex space-x-2">
                             <input type="text" id="new-tag" placeholder="Add a new tag..."
                                    class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
                             <button onclick="saveTag()"
@@ -486,9 +505,12 @@
             filteredImages = ALL_IMAGES.filter(img => {
                 const tagsString = Array.isArray(img.tags) ? img.tags.join(' ') : '';
                 const descriptionString = img.description || '';
+                const cameraString = `${img.camera_make || ''} ${img.camera_model || ''}`;
+                const lensString = img.lens_model || '';
+                const exifString = `${img.focal_length || ''} ${img.aperture || ''} ${img.iso || ''}`;
 
-                // Search across multiple fields
-                const searchString = `${img.image_id} ${img.film_type} ${img.batch_info} ${img.filename_base} ${img.film_stock} ${descriptionString} ${tagsString}`.toLowerCase();
+                // Search across multiple fields including EXIF data
+                const searchString = `${img.image_id} ${img.film_type} ${img.batch_info} ${img.filename_base} ${img.film_stock} ${descriptionString} ${tagsString} ${cameraString} ${lensString} ${exifString}`.toLowerCase();
                 
                 // Text search
                 const matchesQuery = !query || searchString.includes(query);
@@ -543,19 +565,28 @@
             const tagsContainer = document.getElementById('modal-tags');
             const tags = Array.isArray(activeImage.tags) ? activeImage.tags.sort() : [];
             
-            // Render tags with delete button
-            tagsContainer.innerHTML = tags.map(tag => 
-                `<span class="flex items-center space-x-1 px-3 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full">
-                    <span>${tag}</span>
-                    <button 
+            if (tags.length === 0) {
+                tagsContainer.innerHTML = '<span class="text-sm text-gray-400">No tags yet</span>';
+                return;
+            }
+            
+            // Render tags with delete button (only shown when logged in)
+            tagsContainer.innerHTML = tags.map(tag => {
+                const deleteButton = isLoggedIn 
+                    ? `<button 
                         onclick="deleteTag(event, '${tag}')" 
                         class="text-indigo-500 hover:text-red-600 transition duration-100 p-0 m-0 leading-none focus:outline-none"
                         title="Remove tag: ${tag}"
                     >
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                    </button>
-                </span>`
-            ).join('');
+                    </button>`
+                    : '';
+                
+                return `<span class="flex items-center space-x-1 px-3 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full">
+                    <span>${tag}</span>
+                    ${deleteButton}
+                </span>`;
+            }).join('');
         }
 
         function openModal(image) {
@@ -570,8 +601,45 @@
             document.getElementById('modal-type').textContent = image.film_type;
             document.getElementById('modal-stock').textContent = image.film_stock;
             document.getElementById('modal-batch').textContent = image.batch_info;
-            document.getElementById('download-link').href = highResWebUrl; 
-            document.getElementById('description-input').value = image.description || '';
+            document.getElementById('download-link').href = highResWebUrl;
+            
+            // Display EXIF data if available
+            const hasExif = image.camera_model || image.camera_make || image.lens_model || 
+                           image.focal_length || image.aperture || image.shutter_speed || image.iso;
+            
+            const exifSection = document.getElementById('exif-section');
+            if (hasExif) {
+                exifSection.classList.remove('hidden');
+                const cameraStr = [image.camera_make, image.camera_model].filter(Boolean).join(' ');
+                document.getElementById('exif-camera').textContent = cameraStr || 'N/A';
+                document.getElementById('exif-lens').textContent = image.lens_model || 'N/A';
+                document.getElementById('exif-focal').textContent = image.focal_length || 'N/A';
+                document.getElementById('exif-aperture').textContent = image.aperture || 'N/A';
+                document.getElementById('exif-shutter').textContent = image.shutter_speed || 'N/A';
+                document.getElementById('exif-iso').textContent = image.iso || 'N/A';
+                
+                if (image.date_taken) {
+                    const date = new Date(image.date_taken);
+                    document.getElementById('exif-date').textContent = date.toLocaleString();
+                } else {
+                    document.getElementById('exif-date').textContent = 'N/A';
+                }
+            } else {
+                exifSection.classList.add('hidden');
+            }
+            
+            // Set description in both read-only and editable fields
+            const description = image.description || 'No description yet';
+            document.getElementById('description-display').textContent = description;
+            if (isLoggedIn) {
+                document.getElementById('description-input').value = image.description || '';
+            }
+            
+            // Clear tag input field
+            const tagInput = document.getElementById('new-tag');
+            if (tagInput) {
+                tagInput.value = '';
+            }
 
             renderModalTags();
 
@@ -590,8 +658,8 @@
             modal.classList.remove('flex');
             document.body.classList.remove('overflow-hidden');
             activeImage = null;
-            // Re-render gallery view after closing modal in case metadata changed
-            filterImages();
+            
+            // Only update popular tags (no need to reload entire gallery)
             renderPopularTags();
         }
         
@@ -631,9 +699,13 @@ try {
         const updatedTags = [...(activeImage.tags || []), newTag].sort();
         
         const headers = { 'Content-Type': 'application/json' };
-        if (authToken) {
-            headers['Authorization'] = `Bearer ${authToken}`;
+        if (!authToken) {
+            alertMessage('Authentication token missing. Please log in again.', 'bg-red-500');
+            return;
         }
+        headers['Authorization'] = `Bearer ${authToken}`;
+        
+        console.log('[DEBUG] Saving tag with token:', authToken ? 'present' : 'missing');
         
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
             method: 'POST',
@@ -650,13 +722,18 @@ try {
             renderModalTags();
             tagInput.value = '';
             alertMessage(`Tag '${newTag}' added successfully.`, 'bg-green-600');
+        } else if (response.status === 401) {
+            // Token expired or invalid
+            const result = await response.json().catch(() => ({ message: 'Authentication expired' }));
+            alertMessage('Session expired. Please log in again.', 'bg-red-500');
+            logout();
         } else {
             const result = await response.json().catch(() => ({ message: 'Unknown server error.' }));
-            alertMessage(`Database Error during tag save: ${result.message}`, 'bg-red-500');
+            alertMessage(`Error: ${result.message}`, 'bg-red-500');
         }
     } catch (error) {
         console.error("API Error during tag save:", error);
-        alertMessage('Could not connect to the API server. Check configuration.', 'bg-red-500');
+        alertMessage('Could not connect to the API server.', 'bg-red-500');
     }
 }
     
@@ -670,9 +747,11 @@ window.deleteTag = async function(event, tagToDelete) {
         const updatedTags = (activeImage.tags || []).filter(t => t !== tagToDelete);
         
         const headers = { 'Content-Type': 'application/json' };
-        if (authToken) {
-            headers['Authorization'] = `Bearer ${authToken}`;
+        if (!authToken) {
+            alertMessage('Authentication token missing. Please log in again.', 'bg-red-500');
+            return;
         }
+        headers['Authorization'] = `Bearer ${authToken}`;
         
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
             method: 'POST',
@@ -687,14 +766,18 @@ window.deleteTag = async function(event, tagToDelete) {
 
             // Update UI
             renderModalTags();
-            alertMessage(`Tag '${tagToDelete}' removed successfully.`, 'bg-green-600');
+            alertMessage(`Tag '${tagToDelete}' removed successfully.', 'bg-green-600');
+        } else if (response.status === 401) {
+            // Token expired or invalid
+            alertMessage('Session expired. Please log in again.', 'bg-red-500');
+            logout();
         } else {
             const result = await response.json().catch(() => ({ message: 'Unknown server error.' }));
-            alertMessage(`Database Error during tag deletion: ${result.message}`, 'bg-red-500');
+            alertMessage(`Error: ${result.message}`, 'bg-red-500');
         }
     } catch (error) {
         console.error("API Error during tag deletion:", error);
-        alertMessage('Could not connect to the API server or delete tag. Check configuration.', 'bg-red-500');
+        alertMessage('Could not connect to the API server.', 'bg-red-500');
     }
 }
 
@@ -707,9 +790,13 @@ window.saveDescription = async function() {
     try {
         // Actual PUT request for description
         const headers = { 'Content-Type': 'application/json' };
-        if (authToken) {
-            headers['Authorization'] = `Bearer ${authToken}`;
+        if (!authToken) {
+            alertMessage('Authentication token missing. Please log in again.', 'bg-red-500');
+            return;
         }
+        headers['Authorization'] = `Bearer ${authToken}`;
+        
+        console.log('[DEBUG] Saving description with token:', authToken ? 'present' : 'missing');
         
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/description`, {
             method: 'PUT',
@@ -718,18 +805,26 @@ window.saveDescription = async function() {
         });
 
         if (response.ok) {
-            // Update the local data structure (so the user sees the change immediately)
+            // Update the local data structure
             activeImage.description = newDesc; 
             updateLocalImage(activeImage.image_id, { description: newDesc });
-            // *** UPDATED SUCCESS MESSAGE ***
+            
+            // Update the read-only display immediately
+            document.getElementById('description-display').textContent = newDesc || 'No description yet';
+            
             alertMessage("Description saved successfully.", 'bg-green-600');
+        } else if (response.status === 401) {
+            // Token expired or invalid
+            const result = await response.json().catch(() => ({ message: 'Authentication expired' }));
+            alertMessage('Session expired. Please log in again.', 'bg-red-500');
+            logout();
         } else {
             const result = await response.json().catch(() => ({ message: 'Unknown server error.' }));
-            alertMessage(`Database Error: ${result.message}`, 'bg-red-500');
+            alertMessage(`Error: ${result.message}`, 'bg-red-500');
         }
     } catch (error) {
         console.error("API Error during description save:", error);
-        alertMessage('Could not connect to the API server. Check Nginx configuration.', 'bg-red-500');
+        alertMessage('Could not connect to the API server.', 'bg-red-500');
     }
 }
 
@@ -743,7 +838,10 @@ window.saveDescription = async function() {
                 authToken = storedToken;
                 currentUsername = storedUsername;
                 isLoggedIn = true;
+                console.log('[AUTH] Restored session for user:', currentUsername);
                 updateAuthUI();
+            } else {
+                console.log('[AUTH] No stored session found');
             }
         }
 
@@ -855,14 +953,25 @@ window.saveDescription = async function() {
                 clearSelection();
             }
             
-            // Re-render gallery to update card styles
-            const currentQuery = searchInput.value;
-            const currentType = typeFilter.value;
-            if (currentQuery || currentType) {
-                filterImages();
-            } else {
-                showRandomBatch();
-            }
+            // Update existing cards instead of reloading
+            document.querySelectorAll('.image-card').forEach(card => {
+                if (selectMode) {
+                    card.classList.add('selectable');
+                } else {
+                    card.classList.remove('selectable', 'selected');
+                }
+                
+                // Update checkbox visibility
+                const checkbox = card.querySelector('.selection-checkbox');
+                if (checkbox) {
+                    if (selectMode) {
+                        checkbox.style.display = 'flex';
+                    } else {
+                        checkbox.style.display = 'none';
+                        checkbox.innerHTML = '';
+                    }
+                }
+            });
         };
 
         function toggleImageSelection(imageId, cardElement) {
@@ -897,14 +1006,14 @@ window.saveDescription = async function() {
             selectedImages.clear();
             updateMultiSelectToolbar();
             
-            // Re-render to remove selection styling
-            const currentQuery = searchInput.value;
-            const currentType = typeFilter.value;
-            if (currentQuery || currentType) {
-                filterImages();
-            } else {
-                showRandomBatch();
-            }
+            // Remove selection styling from existing cards
+            document.querySelectorAll('.image-card.selected').forEach(card => {
+                card.classList.remove('selected');
+                const checkbox = card.querySelector('.selection-checkbox');
+                if (checkbox) {
+                    checkbox.innerHTML = '';
+                }
+            });
         };
 
         window.bulkTagImages = async function() {
