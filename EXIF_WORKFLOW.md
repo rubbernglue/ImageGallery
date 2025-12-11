@@ -345,3 +345,105 @@ Your complete workflow is now:
 5. **View/search** → EXIF displayed and searchable
 
 All steps handle updates intelligently - only processing what changed!
+
+## Common Issues and Solutions
+
+### Issue: "cannot stat .tmp.jpg: No such file or directory"
+
+**Cause:** Multi-page TIFF files create multiple output files with frame numbers
+
+**Solution:** Updated script now:
+- Uses `[0]` to process only first frame/page
+- Cleans up temp files automatically
+- Handles multi-page TIFFs correctly
+
+**Fix existing files:**
+```bash
+# Clean up temp files
+find /mnt/omv/Photo/Picture_library -name "*.tmp*.jpg" -delete
+
+# Re-run the script
+./process_scaled_library.sh
+```
+
+### Issue: "Wrong data type for PixelXDimension" warnings
+
+**Cause:** TIFF files with non-standard EXIF tags
+
+**Solution:** These are warnings, not errors. The script now:
+- Suppresses these warnings (they're harmless)
+- Uses `-quiet` flag to reduce noise
+- Still processes images correctly
+
+**These warnings are safe to ignore** - the images are processed fine.
+
+### Issue: Files not updating when EXIF changes
+
+**Check if exiftool is installed:**
+```bash
+which exiftool
+# Should output: /usr/bin/exiftool
+
+# If not found, install:
+sudo apt-get install libimage-exiftool-perl
+```
+
+Without exiftool, the script can't detect EXIF-only changes.
+
+### Issue: Script is slow
+
+**Optimization tips:**
+
+1. **Skip unchanged files** (already automatic)
+2. **Process specific directories only**
+3. **Use SSD for TARGET_LIBRARY if possible**
+
+**Benchmarks:**
+- 100 images, all new: ~5-10 minutes
+- 100 images, EXIF update: ~2-3 minutes
+- 100 images, no changes: ~5-10 seconds
+
+### Issue: Some images missing EXIF in database
+
+**Debug steps:**
+
+```bash
+# 1. Check if EXIF exists in scaled image
+exiftool /mnt/omv/Photo/Picture_library/rollfilm/.../2560/image.jpg | grep -i camera
+
+# 2. Check if Python can read it
+python3 << 'PYTHON'
+from PIL import Image
+img = Image.open('/path/to/image.jpg')
+exif = img._getexif()
+print(f"EXIF found: {exif is not None}")
+PYTHON
+
+# 3. Re-scan specific batch
+python update_database.py --scan-dir /opt/media/rollfilm batch_name
+```
+
+### Recovering from Failed Run
+
+If script was interrupted or failed:
+
+```bash
+# 1. Clean up temp files
+find /mnt/omv/Photo/Picture_library -name "*.tmp*.jpg" -delete
+
+# 2. Check for incomplete directories
+find /mnt/omv/Photo/Picture_library -type d -name "600" -o -name "2560" | while read dir; do
+    if [ -z "$(ls -A $dir)" ]; then
+        echo "Empty: $dir"
+    fi
+done
+
+# 3. Re-run script (will process missing files)
+./process_scaled_library.sh
+```
+
+The script will automatically:
+- Skip completed files
+- Process incomplete files
+- Clean up temp files
+

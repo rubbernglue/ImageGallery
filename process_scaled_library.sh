@@ -54,6 +54,14 @@ fi
 echo "Starting image processing and scaled library creation..."
 echo "============================================================"
 
+# Clean up any leftover temp files from previous failed runs
+echo "Cleaning up temporary files..."
+find "$TARGET_LIBRARY" -name "*.tmp.jpg" -o -name "*.tmp-*.jpg" 2>/dev/null | while read -r tmpfile; do
+    rm -f "$tmpfile"
+done
+echo "✓ Cleanup complete"
+echo ""
+
 EXCLUDE_PATHS_ARR=(
     -path '*/@eaDir*'
     -o -name 'part_*.jpg'
@@ -107,24 +115,47 @@ process_image() {
     local output_path="$2"
     local size="$3"
     
+    # Create temp filename
+    local temp_file="${output_path}.tmp.jpg"
+    
     if $USE_EXIFTOOL; then
         # Method 1: Use exiftool for perfect EXIF preservation
+        
         # First, resize with ImageMagick
-        magick "$image_path" -auto-orient -resize "$size" -quality 85 "$output_path.tmp.jpg"
+        # Use [0] to only process first frame/page of multi-page TIFFs
+        # Suppress TIFF warnings with -quiet
+        magick "${image_path}[0]" -quiet -auto-orient -resize "$size" -quality 85 "$temp_file" 2>&1 | grep -v "Wrong data type" | grep -v "tag ignored" || true
+        
+        # Check if resize was successful
+        if [ ! -f "$temp_file" ]; then
+            echo "      ERROR: Failed to create resized image"
+            return 1
+        fi
         
         # Then copy ALL EXIF data from source to resized image
-        exiftool -TagsFromFile "$image_path" -all:all -overwrite_original "$output_path.tmp.jpg" 2>/dev/null
+        # Suppress warnings about TIFF data types
+        exiftool -TagsFromFile "$image_path" -all:all -overwrite_original "$temp_file" 2>/dev/null
         
         # Move to final location
-        mv "$output_path.tmp.jpg" "$output_path"
+        mv "$temp_file" "$output_path"
+        
     else
         # Method 2: Use ImageMagick's built-in EXIF handling (preserves most EXIF)
-        magick "$image_path" -auto-orient -resize "$size" -quality 85 -strip -strip "$output_path.tmp.jpg"
         
-        # Copy EXIF using ImageMagick (less complete than exiftool)
-        magick "$image_path" -profile 8bim -profile iptc -profile xmp "$output_path.tmp.jpg" "$output_path"
-        rm -f "$output_path.tmp.jpg"
+        # Process first frame only with [0], preserve EXIF profiles
+        # Suppress TIFF warnings
+        magick "${image_path}[0]" -quiet -auto-orient -resize "$size" -quality 85 "$output_path" 2>&1 | grep -v "Wrong data type" | grep -v "tag ignored" || true
+        
+        if [ ! -f "$output_path" ]; then
+            echo "      ERROR: Failed to create resized image"
+            return 1
+        fi
     fi
+    
+    # Clean up any stray temp files (in case of multi-page TIFF issues)
+    rm -f "${output_path}.tmp-"*.jpg
+    
+    return 0
 }
 
 # ============================================================================
@@ -200,12 +231,18 @@ process_source_type() {
             
             # Process 600px version if needed
             if [ "$small_needs_update" = "yes" ]; then
-                process_image "$image_path" "$SMALL_OUTPUT" "$SIZE_SMALL"
+                if ! process_image "$image_path" "$SMALL_OUTPUT" "$SIZE_SMALL"; then
+                    echo "      FAILED to process 600px version"
+                    ((TOTAL_ERRORS++))
+                fi
             fi
             
             # Process 2560px version if needed
             if [ "$large_needs_update" = "yes" ]; then
-                process_image "$image_path" "$LARGE_OUTPUT" "$SIZE_LARGE"
+                if ! process_image "$image_path" "$LARGE_OUTPUT" "$SIZE_LARGE"; then
+                    echo "      FAILED to process 2560px version"
+                    ((TOTAL_ERRORS++))
+                fi
             fi
             
         done
