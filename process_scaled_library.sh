@@ -233,13 +233,15 @@ process_source_type() {
             continue
         fi
 
-        SOURCE_DIR_NAME=$(basename "$roll_link") 
-        TARGET_DEST="$TARGET_LIBRARY/$TARGET_SUBDIR/$SOURCE_DIR_NAME"
+        SOURCE_DIR_NAME=$(basename "$roll_link")
+        # Replace spaces with underscores in directory name
+        TARGET_DIR_NAME="${SOURCE_DIR_NAME// /_}"
+        TARGET_DEST="$TARGET_LIBRARY/$TARGET_SUBDIR/$TARGET_DIR_NAME"
         
         mkdir -p "$TARGET_DEST" 
         
         echo ""
-        echo "📁 Directory: $SOURCE_DIR_NAME"
+        echo "📁 Directory: $SOURCE_DIR_NAME → $TARGET_DIR_NAME"
         echo "   Source: $roll_dir"
         
         local batch_processed=0
@@ -250,11 +252,13 @@ process_source_type() {
         find "$roll_dir" -maxdepth 1 -type f \( "${ALLOWED_EXTENSIONS_ARR[@]}" \) -not \( "${EXCLUDE_PATHS_ARR[@]}" \) -print0 | while IFS= read -r -d $'\0' image_path; do
             
             FILENAME=$(basename "$image_path")
-            BASENAME="${FILENAME%.*}" 
+            BASENAME="${FILENAME%.*}"
+            # Replace spaces with underscores in filename
+            BASENAME_CLEAN="${BASENAME// /_}"
             
-            PICTURE_DIR="$TARGET_DEST/$BASENAME"
-            SMALL_OUTPUT="$PICTURE_DIR/600/$BASENAME.jpg"
-            LARGE_OUTPUT="$PICTURE_DIR/2560/$BASENAME.jpg"
+            PICTURE_DIR="$TARGET_DEST/$BASENAME_CLEAN"
+            SMALL_OUTPUT="$PICTURE_DIR/600/$BASENAME_CLEAN.jpg"
+            LARGE_OUTPUT="$PICTURE_DIR/2560/$BASENAME_CLEAN.jpg"
             
             # Create the destination structure
             mkdir -p "$PICTURE_DIR/600"

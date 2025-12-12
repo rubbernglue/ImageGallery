@@ -64,6 +64,44 @@
             height: 16px;
             color: white;
         }
+        /* Image zoom styles */
+        #modal-image.zoomed {
+            max-height: none !important;
+            max-width: none !important;
+            cursor: move;
+            position: fixed;
+            z-index: 52 !important;
+            transition: transform 0.1s ease-out;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+        }
+        /* Zoom overlay - DISABLED (keeping for click to exit functionality) */
+        #zoom-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: transparent; /* No dark background */
+            z-index: 51;
+            cursor: zoom-out;
+        }
+        #zoom-overlay.active {
+            display: block;
+        }
+        .zoom-hint {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            z-index: 53;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body class="bg-gray-50 font-sans">
@@ -210,6 +248,11 @@
     <!-- Image Detail Modal -->
     <div id="detail-modal" class="hidden fixed inset-0 z-50 overflow-y-auto bg-gray-900 bg-opacity-75 items-start justify-center p-4 pt-10" onclick="closeModal(event)">
         
+        <!-- Zoom Overlay (inside modal, behind image) -->
+        <div id="zoom-overlay" onclick="exitZoom(event)">
+            <div class="zoom-hint">Move mouse to pan • Click to exit</div>
+        </div>
+        
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl transform transition-all duration-300 scroll-hidden" onclick="event.stopPropagation();">
             <div class="flex justify-end p-4">
                 <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition">
@@ -220,7 +263,9 @@
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-8 pt-0">
                 <!-- Image Display (2/3 width) -->
                 <div class="lg:col-span-2">
-                    <img id="modal-image" src="" alt="Image Detail" class="w-full h-auto rounded-lg shadow-xl mb-4 max-h-[80vh] object-contain"
+                    <img id="modal-image" src="" alt="Image Detail" 
+                         class="w-full h-auto rounded-lg shadow-xl mb-4 max-h-[80vh] object-contain cursor-zoom-in transition-transform duration-300"
+                         onclick="toggleImageZoom(event)"
                          onerror="this.onerror=null; this.src='https://placehold.co/800x600/6b7280/ffffff?text=Image+Load+Error';">
                     <div class="flex flex-col space-y-2 mt-2">
                         <a id="download-link" href="#" download class="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-800 font-medium transition">
@@ -633,6 +678,83 @@
         }
 
         // --- MODAL FUNCTIONS ---
+        
+        let zoomScale = 2.0; // 2x zoom for better detail viewing
+        
+        window.toggleImageZoom = function(event) {
+            event.stopPropagation(); // Prevent modal from closing
+            
+            const modalImage = document.getElementById('modal-image');
+            const zoomOverlay = document.getElementById('zoom-overlay');
+            
+            if (modalImage.classList.contains('zoomed')) {
+                // Already zoomed, exit
+                exitZoom(event);
+            } else {
+                // Enter zoom mode
+                modalImage.classList.add('zoomed');
+                zoomOverlay.classList.add('active');
+                
+                // Get image dimensions and calculate scaled size
+                const rect = modalImage.getBoundingClientRect();
+                const scaledWidth = rect.width * zoomScale;
+                const scaledHeight = rect.height * zoomScale;
+                
+                // Store dimensions for panning calculations
+                modalImage.dataset.scaledWidth = scaledWidth;
+                modalImage.dataset.scaledHeight = scaledHeight;
+                
+                // Center the image initially
+                modalImage.style.transform = `translate(-50%, -50%) scale(${zoomScale})`;
+                modalImage.style.top = '50%';
+                modalImage.style.left = '50%';
+                
+                // Add mouse move listener for panning
+                document.addEventListener('mousemove', handleZoomPan);
+            }
+        };
+        
+        function handleZoomPan(event) {
+            const modalImage = document.getElementById('modal-image');
+            if (!modalImage.classList.contains('zoomed')) return;
+            
+            // Calculate mouse position as percentage of viewport
+            const mouseX = event.clientX / window.innerWidth;
+            const mouseY = event.clientY / window.innerHeight;
+            
+            // Get scaled dimensions
+            const scaledWidth = parseFloat(modalImage.dataset.scaledWidth);
+            const scaledHeight = parseFloat(modalImage.dataset.scaledHeight);
+            
+            // Calculate how much we can pan (the overflow amount)
+            const maxPanX = (scaledWidth - window.innerWidth) / 2;
+            const maxPanY = (scaledHeight - window.innerHeight) / 2;
+            
+            // Calculate pan offset based on mouse position
+            // Center = 0.5, Left edge = 0, Right edge = 1
+            const panX = (mouseX - 0.5) * maxPanX * 2;
+            const panY = (mouseY - 0.5) * maxPanY * 2;
+            
+            // Apply transform with pan offset
+            modalImage.style.transform = `translate(calc(-50% - ${panX}px), calc(-50% - ${panY}px)) scale(${zoomScale})`;
+        }
+        
+        window.exitZoom = function(event) {
+            event.stopPropagation();
+            
+            const modalImage = document.getElementById('modal-image');
+            const zoomOverlay = document.getElementById('zoom-overlay');
+            
+            modalImage.classList.remove('zoomed');
+            zoomOverlay.classList.remove('active');
+            modalImage.style.transform = '';
+            modalImage.style.top = '';
+            modalImage.style.left = '';
+            modalImage.style.cursor = 'zoom-in';
+            
+            // Remove mouse move listener
+            document.removeEventListener('mousemove', handleZoomPan);
+        };
 
         function renderModalTags() {
             const tagsContainer = document.getElementById('modal-tags');
@@ -736,6 +858,18 @@
             // Allow clicking only on the modal background to close
             if (event && event.target.id !== 'detail-modal' && event.target.tagName !== 'BUTTON') return;
             if (event && event.target.tagName === 'BUTTON' && event.target.closest('#detail-modal') !== modal) return;
+
+            // Exit zoom mode if active
+            const modalImage = document.getElementById('modal-image');
+            const zoomOverlay = document.getElementById('zoom-overlay');
+            if (modalImage.classList.contains('zoomed')) {
+                modalImage.classList.remove('zoomed');
+                zoomOverlay.classList.remove('active');
+                modalImage.style.transform = '';
+                modalImage.style.top = '';
+                modalImage.style.left = '';
+                document.removeEventListener('mousemove', handleZoomPan);
+            }
 
             modal.classList.add('hidden');
             modal.classList.remove('flex');
