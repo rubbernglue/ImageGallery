@@ -14,6 +14,9 @@ SOURCE_ROLLFILM="/mnt/omv/Photo/Collected/Rollfilm"
 SOURCE_SHEETFILM="/mnt/omv/Photo/Collected/Sheetfilm"
 TARGET_LIBRARY="/mnt/omv/Photo/Picture_library"
 
+# Index file for tracking processed images (speeds up subsequent runs)
+INDEX_FILE="$TARGET_LIBRARY/.processing_index"
+
 # Define output sizes
 SIZE_SMALL="600x600>"   # Max width/height 600px, only scale down
 SIZE_LARGE="2560x2560>" # Max width/height 2560px, only scale down
@@ -54,12 +57,21 @@ fi
 echo "Starting image processing and scaled library creation..."
 echo "============================================================"
 
+# Initialize or load index file
+touch "$INDEX_FILE"
+echo "Using index file: $INDEX_FILE ($(wc -l < "$INDEX_FILE") entries)"
+
 # Clean up any leftover temp files from previous failed runs
 echo "Cleaning up temporary files..."
-find "$TARGET_LIBRARY" -name "*.tmp.jpg" -o -name "*.tmp-*.jpg" 2>/dev/null | while read -r tmpfile; do
-    rm -f "$tmpfile"
-done
-echo "✓ Cleanup complete"
+TEMP_COUNT=$(find "$TARGET_LIBRARY" -name "*.tmp.jpg" -o -name "*.tmp-*.jpg" 2>/dev/null | wc -l)
+if [ "$TEMP_COUNT" -gt 0 ]; then
+    find "$TARGET_LIBRARY" -name "*.tmp.jpg" -o -name "*.tmp-*.jpg" 2>/dev/null | while read -r tmpfile; do
+        rm -f "$tmpfile"
+    done
+    echo "✓ Cleaned $TEMP_COUNT temp files"
+else
+    echo "✓ No temp files to clean"
+fi
 echo ""
 
 EXCLUDE_PATHS_ARR=(
@@ -77,7 +89,15 @@ ALLOWED_EXTENSIONS_ARR=(
 )
 
 # ============================================================================
-# Function: Check if source image EXIF has changed
+# Function: Get file signature for index (mtime + size)
+# ============================================================================
+get_file_signature() {
+    local file="$1"
+    stat -c "%Y:%s" "$file" 2>/dev/null || echo "0:0"
+}
+
+# ============================================================================
+# Function: Check if source image needs update using index
 # ============================================================================
 needs_update() {
     local source_file="$1"
@@ -88,16 +108,27 @@ needs_update() {
         return 0 # true - needs update
     fi
     
+    # Quick check using index file (much faster than exiftool)
+    local source_sig=$(get_file_signature "$source_file")
+    local index_key="${source_file}|${target_file}"
+    
+    if [ -f "$INDEX_FILE" ]; then
+        # Check if this file pair is in the index with same signature
+        if grep -q "^${index_key}|${source_sig}$" "$INDEX_FILE" 2>/dev/null; then
+            return 1 # false - no update needed (index says it's current)
+        fi
+    fi
+    
     # If source is newer than target, needs update
     if [ "$source_file" -nt "$target_file" ]; then
         return 0 # true - needs update
     fi
     
-    # Check if EXIF data has changed (if exiftool available)
-    if $USE_EXIFTOOL; then
-        # Compare key EXIF fields
-        local source_exif=$(exiftool -Make -Model -LensModel -ISO -FNumber -ExposureTime -FocalLength -DateTimeOriginal "$source_file" 2>/dev/null | md5sum)
-        local target_exif=$(exiftool -Make -Model -LensModel -ISO -FNumber -ExposureTime -FocalLength -DateTimeOriginal "$target_file" 2>/dev/null | md5sum)
+    # Optional: Deep EXIF check only if index says might be different
+    # This is slower but catches EXIF-only changes
+    if $USE_EXIFTOOL && [ -n "${DEEP_EXIF_CHECK:-}" ]; then
+        local source_exif=$(exiftool -Make -Model -LensModel -ISO -FNumber -ExposureTime -FocalLength -DateTimeOriginal "$source_file" 2>/dev/null | md5sum | cut -d' ' -f1)
+        local target_exif=$(exiftool -Make -Model -LensModel -ISO -FNumber -ExposureTime -FocalLength -DateTimeOriginal "$target_file" 2>/dev/null | md5sum | cut -d' ' -f1)
         
         if [ "$source_exif" != "$target_exif" ]; then
             return 0 # true - EXIF changed, needs update
@@ -105,6 +136,24 @@ needs_update() {
     fi
     
     return 1 # false - no update needed
+}
+
+# ============================================================================
+# Function: Update index with processed file
+# ============================================================================
+update_index() {
+    local source_file="$1"
+    local target_file="$2"
+    local source_sig=$(get_file_signature "$source_file")
+    local index_key="${source_file}|${target_file}"
+    
+    # Remove old entry if exists
+    if [ -f "$INDEX_FILE" ]; then
+        sed -i "/^$(echo "$index_key" | sed 's/[\/&]/\\&/g')|/d" "$INDEX_FILE" 2>/dev/null || true
+    fi
+    
+    # Add new entry
+    echo "${index_key}|${source_sig}" >> "$INDEX_FILE"
 }
 
 # ============================================================================
@@ -231,7 +280,9 @@ process_source_type() {
             
             # Process 600px version if needed
             if [ "$small_needs_update" = "yes" ]; then
-                if ! process_image "$image_path" "$SMALL_OUTPUT" "$SIZE_SMALL"; then
+                if process_image "$image_path" "$SMALL_OUTPUT" "$SIZE_SMALL"; then
+                    update_index "$image_path" "$SMALL_OUTPUT"
+                else
                     echo "      FAILED to process 600px version"
                     ((TOTAL_ERRORS++))
                 fi
@@ -239,7 +290,9 @@ process_source_type() {
             
             # Process 2560px version if needed
             if [ "$large_needs_update" = "yes" ]; then
-                if ! process_image "$image_path" "$LARGE_OUTPUT" "$SIZE_LARGE"; then
+                if process_image "$image_path" "$LARGE_OUTPUT" "$SIZE_LARGE"; then
+                    update_index "$image_path" "$LARGE_OUTPUT"
+                else
                     echo "      FAILED to process 2560px version"
                     ((TOTAL_ERRORS++))
                 fi

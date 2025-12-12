@@ -1,0 +1,26 @@
+# Fail2Ban jail configuration for ImageArchive
+# Add this to /etc/fail2ban/jail.local or /etc/fail2ban/jail.d/imagearchive.local
+
+[imagearchive]
+enabled = true
+port = http,https
+filter = imagearchive
+logpath = /var/log/imagearchive/auth.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+action = iptables-multiport[name=imagearchive, port="http,https", protocol=tcp]
+
+# Configuration explanation:
+# - enabled = true: Activate this jail
+# - port: Monitor HTTP and HTTPS ports
+# - filter: Use the imagearchive filter (from imagearchive.conf)
+# - logpath: Path to ImageArchive auth log
+# - maxretry = 5: Ban after 5 failed attempts
+# - findtime = 600: Within 10 minutes (600 seconds)
+# - bantime = 3600: Ban for 1 hour (3600 seconds)
+# - action: Block using iptables
+
+# Adjust these values to your security requirements:
+# - For stricter security: maxretry=3, bantime=7200 (2 hours)
+# - For more lenient: maxretry=10, bantime=1800 (30 minutes)

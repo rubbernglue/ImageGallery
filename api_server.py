@@ -4,11 +4,28 @@ import secrets
 import hashlib
 import hmac
 import time
+import logging
 import psycopg2
 import psycopg2.extras # REQUIRED for RealDictCursor
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from functools import wraps
+from datetime import datetime
+
+# Import authentication configuration from separate file
+try:
+    from config_auth import USERS, SECRET_KEY, TOKEN_EXPIRATION
+except ImportError:
+    print("WARNING: config_auth.py not found. Using default configuration.")
+    print("Create config_auth.py from the template for production use.")
+    USERS = {
+        'admin': {
+            'salt': '8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d',
+            'hash': hashlib.pbkdf2_hmac('sha256', b'admin123', b'8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d', 100000).hex()
+        }
+    }
+    SECRET_KEY = 'default_insecure_key_change_this'
+    TOKEN_EXPIRATION = 86400
 
 # --- IMPORTANT: CONFIGURE YOUR DATABASE CONNECTION HERE ---
 DB_CONFIG = {
@@ -19,45 +36,49 @@ DB_CONFIG = {
     'port': '5432'
 }
 
-# Secret key for password hashing - CHANGE THIS TO A RANDOM VALUE!
-# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY = 'change_this_to_a_random_secret_key_generated_above'
+# Configure fail2ban compatible logging
+# Failed login attempts will be logged to this file
+AUTH_LOG_FILE = '/var/log/imagearchive/auth.log'
 
-# ============================================================================
-# User credentials with salted hashed passwords
-# ============================================================================
-# To add a new user:
-# 1. Run: python generate_password_hash.py
-# 2. Enter username and password when prompted
-# 3. Copy the entire dictionary entry (including the username line)
-# 4. Paste it into the USERS dictionary below
-#
-# EXAMPLE OUTPUT from generate_password_hash.py:
-#     'myusername': {
-#         'salt': 'a1b2c3d4e5f6...',
-#         'hash': '1234567890abcdef...'
-#     },
-#
-# The script generates both the salt AND the hash for you!
-# Just copy-paste the entire block including the username.
-# ============================================================================
-
-USERS = {
-    # Default admin user - password: 'admin123' - CHANGE THIS!
-    'admin': {
-        'salt': '8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d',
-        'hash': hashlib.pbkdf2_hmac('sha256', b'admin123', b'8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d', 100000).hex()
-    },
-    # Add more users below by running: python generate_password_hash.py
-    # Then copy-paste the output here:
-    
-}
+# Setup logging for authentication events
+os.makedirs(os.path.dirname(AUTH_LOG_FILE), exist_ok=True)
+auth_logger = logging.getLogger('auth')
+auth_logger.setLevel(logging.INFO)
+auth_handler = logging.FileHandler(AUTH_LOG_FILE)
+auth_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+auth_logger.addHandler(auth_handler)
 
 # Store active tokens with expiration (in production, use database or Redis)
 active_tokens = {}  # Format: {token: {'username': username, 'expires': timestamp}}
 
-# Token expiration time in seconds (24 hours)
-TOKEN_EXPIRATION = 86400
+# Token persistence file (optional - for surviving server restarts)
+TOKEN_PERSISTENCE_FILE = '/opt/api/imagearchive_tokens.json'
+
+def load_persisted_tokens():
+    """Load tokens from disk (survives server restart)."""
+    global active_tokens
+    try:
+        if os.path.exists(TOKEN_PERSISTENCE_FILE):
+            with open(TOKEN_PERSISTENCE_FILE, 'r') as f:
+                active_tokens = json.load(f)
+            # Clean expired tokens
+            current_time = time.time()
+            active_tokens = {k: v for k, v in active_tokens.items() if v['expires'] > current_time}
+            print(f"[AUTH] Loaded {len(active_tokens)} active tokens from disk")
+    except Exception as e:
+        print(f"[AUTH] Could not load persisted tokens: {e}")
+        active_tokens = {}
+
+def save_persisted_tokens():
+    """Save tokens to disk."""
+    try:
+        with open(TOKEN_PERSISTENCE_FILE, 'w') as f:
+            json.dump(active_tokens, f)
+    except Exception as e:
+        print(f"[AUTH] Could not save tokens: {e}")
+
+# Load tokens on startup
+load_persisted_tokens()
 
 # ---------------------------------------------------------
 
@@ -113,20 +134,30 @@ def require_auth(f):
         auth_header = request.headers.get('Authorization')
         
         if not auth_header or not auth_header.startswith('Bearer '):
+            print(f"[AUTH] No authorization header provided")
             return jsonify({"success": False, "message": "Authentication required"}), 401
         
         token = auth_header.split(' ')[1]
         
+        # Debug: Log token validation
+        print(f"[AUTH] Validating token: {token[:10]}... (total active tokens: {len(active_tokens)})")
+        
         # Check if token exists and is not expired
         if token not in active_tokens:
+            print(f"[AUTH] Token not found in active_tokens")
             return jsonify({"success": False, "message": "Invalid or expired token"}), 401
         
         token_data = active_tokens[token]
-        if token_data['expires'] < time.time():
+        current_time = time.time()
+        expires_in = token_data['expires'] - current_time
+        
+        if expires_in < 0:
             # Token expired, remove it
+            print(f"[AUTH] Token expired {abs(expires_in):.0f} seconds ago")
             del active_tokens[token]
             return jsonify({"success": False, "message": "Token expired, please log in again"}), 401
         
+        print(f"[AUTH] Token valid for user '{token_data['username']}' (expires in {expires_in/3600:.1f} hours)")
         return f(*args, **kwargs)
     
     return decorated_function
@@ -159,7 +190,15 @@ def login():
                 'expires': time.time() + TOKEN_EXPIRATION
             }
             
-            print(f"[AUTH] User '{username}' logged in successfully (token expires in {TOKEN_EXPIRATION/3600:.1f} hours)")
+            # Persist tokens to disk
+            save_persisted_tokens()
+            
+            # Log successful login
+            client_ip = request.headers.get('X-Real-IP', request.remote_addr)
+            print(f"[AUTH] User '{username}' logged in successfully from {client_ip} (token: {token[:10]}...)")
+            print(f"[AUTH] Active tokens: {len(active_tokens)}")
+            auth_logger.info(f"SUCCESS: user={username} ip={client_ip}")
+            
             return jsonify({
                 "success": True, 
                 "token": token, 
@@ -167,7 +206,11 @@ def login():
                 "expires_in": TOKEN_EXPIRATION
             }), 200
         else:
-            print(f"[AUTH] Failed login attempt for username: {username}")
+            # Log failed login attempt in fail2ban compatible format
+            client_ip = request.headers.get('X-Real-IP', request.remote_addr)
+            print(f"[AUTH] Failed login attempt for username: {username} from {client_ip}")
+            auth_logger.warning(f"FAILED: user={username} ip={client_ip}")
+            
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
             
     except Exception as e:
@@ -185,6 +228,7 @@ def logout():
             if token in active_tokens:
                 username = active_tokens[token]['username']
                 del active_tokens[token]
+                save_persisted_tokens()
                 print(f"[AUTH] User '{username}' logged out")
         
         return jsonify({"success": True, "message": "Logged out successfully"}), 200

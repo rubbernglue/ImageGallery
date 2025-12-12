@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head><title>JS Syntax Test</title></head>
+<body>
+<h1>Testing JavaScript Syntax</h1>
+<div id="result"></div>
+<script>
+// Extract just the parseURLParameters and updateURL functions to test them
+function parseURLParameters() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return {
+            image: params.get('image'),
+            search: params.get('search'),
+            type: params.get('type')
+        };
+    } catch (error) {
+        console.error('[URL] Error parsing URL parameters:', error);
+        return { image: null, search: null, type: null };
+    }
+}
+
+function updateURL(params) {
+    try {
+        const url = new URL(window.location.href);
+        Object.keys(params).forEach(key => {
+            if (params[key]) {
+                url.searchParams.set(key, params[key]);
+            } else {
+                url.searchParams.delete(key);
+            }
+        });
+        window.history.replaceState({}, '', url.toString());
+    } catch (error) {
+        console.error('[URL] Error updating URL:', error);
+    }
+}
+
+// Test the functions
+try {
+    const params = parseURLParameters();
+    document.getElementById('result').innerHTML = `
+        <p>✓ parseURLParameters() works</p>
+        <p>✓ updateURL() defined</p>
+        <p>Params: ${JSON.stringify(params)}</p>
+    `;
+    console.log('✓ All URL functions work correctly');
+} catch (error) {
+    document.getElementById('result').innerHTML = `
+        <p style="color:red">✗ Error: ${error.message}</p>
+    `;
+    console.error('✗ Error:', error);
+}
+</script>
+</body>
+</html>

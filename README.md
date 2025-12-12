@@ -288,3 +288,91 @@ The configuration includes:
 - Static file serving for images
 - Proper CORS and security headers
 
+
+## URL Sharing
+
+### Share Specific Images
+
+When viewing an image in the modal, the URL automatically updates. You can copy this URL to share:
+
+**Example URLs:**
+```
+https://yoursite.com/image_gallery.html?image=rollfilm/645_2025_Nikon/image_001
+```
+
+Anyone with this link will see that specific image opened in the modal.
+
+### Share Searches
+
+When searching or filtering, the URL updates with your search parameters:
+
+**Example URLs:**
+```
+https://yoursite.com/image_gallery.html?search=nikon
+https://yoursite.com/image_gallery.html?search=f/2.8&type=rollfilm
+https://yoursite.com/image_gallery.html?search=2024-12
+```
+
+### How to Share
+
+1. **Share an image**: Open the image → Copy browser URL → Send to someone
+2. **Share a search**: Search for something → Copy browser URL → Send to someone
+
+No "share button" needed - just copy the URL from your browser!
+
+### Timestamp Search
+
+You can now search by date taken:
+
+**Search examples:**
+- `2024` - All images from 2024
+- `2024-12` - All images from December 2024
+- `2024-12-25` - All images from Christmas Day 2024
+
+The search includes year, month, day, and full date formats.
+
+## Performance Optimization
+
+### Index File for Faster Processing
+
+The `process_scaled_library.sh` script now uses an index file to track processed images:
+
+**Location:** `/mnt/omv/Photo/Picture_library/.processing_index`
+
+**Benefits:**
+- ⚡ 10-100x faster on subsequent runs
+- Skips unchanged files instantly (no file stat needed)
+- Only checks files that might have changed
+- Automatically maintained
+
+**Performance comparison:**
+- **Without index**: Check 8000 files = ~2-5 minutes
+- **With index**: Check 8000 files = ~5-10 seconds
+
+**The index tracks:**
+- Source file path
+- Target file path  
+- File modification time
+- File size
+
+**Deep EXIF check (optional):**
+Set environment variable to enable slower but more thorough EXIF checking:
+```bash
+DEEP_EXIF_CHECK=1 ./process_scaled_library.sh
+```
+
+This compares EXIF data between source and target (slower but catches EXIF-only changes).
+
+### Index Maintenance
+
+The index is automatically maintained - no manual intervention needed!
+
+**Force rebuild everything:**
+```bash
+# Delete index to force full re-check
+rm /mnt/omv/Photo/Picture_library/.processing_index
+
+# Re-run script
+./process_scaled_library.sh
+```
+

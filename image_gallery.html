@@ -354,22 +354,29 @@
 
         async function loadData() {
             try {
+                console.log('[API] Fetching images from:', API_BASE_URL);
+                
                 // Fetch data from the API server
                 const response = await fetch(API_BASE_URL);
+                console.log('[API] Response status:', response.status);
+                
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                
                 const data = await response.json();
+                console.log('[API] Response data:', data);
+                
                 if (data.success && data.images) {
                     ALL_IMAGES = data.images;
-                    console.log(`Successfully loaded ${ALL_IMAGES.length} image records from database.`);
+                    console.log(`[API] Successfully loaded ${ALL_IMAGES.length} image records from database.`);
                 } else {
                     throw new Error('Invalid API response format');
                 }
             } catch (error) {
-                console.error("Could not load images from API.", error);
+                console.error("[API] ERROR loading images:", error);
                 // Critical error handling without using placeholder data
-                alertMessage('Critical Error: Could not load required image data from API. Make sure the API server is running on http://172.16.8.26:5000', 'bg-red-700');
+                alertMessage('Critical Error: Could not load required image data from API. Check browser console for details.', 'bg-red-700');
                 ALL_IMAGES = []; 
             }
         }
@@ -495,6 +502,13 @@
             const query = searchInput.value.toLowerCase().trim();
             const filterType = typeFilter.value;
             
+            // Update URL with search parameters
+            updateURL({ 
+                search: query || null, 
+                type: filterType || null,
+                image: null  // Clear image when searching
+            });
+            
             // If no filter is active, revert to the random view
             if (!query && !filterType) {
                 showRandomBatch();
@@ -507,10 +521,20 @@
                 const descriptionString = img.description || '';
                 const cameraString = `${img.camera_make || ''} ${img.camera_model || ''}`;
                 const lensString = img.lens_model || '';
-                const exifString = `${img.focal_length || ''} ${img.aperture || ''} ${img.iso || ''}`;
+                const exifString = `${img.focal_length || ''} ${img.aperture || ''} ${img.iso || ''} ${img.shutter_speed || ''}`;
+                
+                // Format date_taken for searching (YYYY-MM-DD and individual components)
+                let dateString = '';
+                if (img.date_taken) {
+                    const date = new Date(img.date_taken);
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    dateString = `${year} ${month} ${day} ${year}-${month}-${day} ${year}-${month}`;
+                }
 
-                // Search across multiple fields including EXIF data
-                const searchString = `${img.image_id} ${img.film_type} ${img.batch_info} ${img.filename_base} ${img.film_stock} ${descriptionString} ${tagsString} ${cameraString} ${lensString} ${exifString}`.toLowerCase();
+                // Search across multiple fields including EXIF data and timestamps
+                const searchString = `${img.image_id} ${img.film_type} ${img.batch_info} ${img.filename_base} ${img.film_stock} ${descriptionString} ${tagsString} ${cameraString} ${lensString} ${exifString} ${dateString}`.toLowerCase();
                 
                 // Text search
                 const matchesQuery = !query || searchString.includes(query);
@@ -593,6 +617,9 @@
             activeImage = image;
             const modal = document.getElementById('detail-modal');
             
+            // Update URL for sharing (without reloading page)
+            updateURL({ image: image.image_id });
+            
             const highResWebUrl = filePathToWebUrl(image.highres_path);
             
             document.getElementById('modal-image').src = highResWebUrl;
@@ -620,7 +647,14 @@
                 
                 if (image.date_taken) {
                     const date = new Date(image.date_taken);
-                    document.getElementById('exif-date').textContent = date.toLocaleString();
+                    // Format as YYYY-MM-DD HH:MM in 24-hour format
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    const hours = String(date.getHours()).padStart(2, '0');
+                    const minutes = String(date.getMinutes()).padStart(2, '0');
+                    const formatted = `${year}-${month}-${day} ${hours}:${minutes}`;
+                    document.getElementById('exif-date').textContent = formatted;
                 } else {
                     document.getElementById('exif-date').textContent = 'N/A';
                 }
@@ -658,6 +692,9 @@
             modal.classList.remove('flex');
             document.body.classList.remove('overflow-hidden');
             activeImage = null;
+            
+            // Clear image parameter from URL
+            updateURL({ image: null });
             
             // Only update popular tags (no need to reload entire gallery)
             renderPopularTags();
@@ -700,12 +737,15 @@ try {
         
         const headers = { 'Content-Type': 'application/json' };
         if (!authToken) {
+            console.error('[TAG] No auth token available!');
             alertMessage('Authentication token missing. Please log in again.', 'bg-red-500');
             return;
         }
         headers['Authorization'] = `Bearer ${authToken}`;
         
-        console.log('[DEBUG] Saving tag with token:', authToken ? 'present' : 'missing');
+        console.log('[TAG] Saving tag:', newTag);
+        console.log('[TAG] Token:', authToken.substring(0, 10) + '...');
+        console.log('[TAG] Image:', activeImage.image_id);
         
         const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/tags`, {
             method: 'POST',
@@ -766,7 +806,7 @@ window.deleteTag = async function(event, tagToDelete) {
 
             // Update UI
             renderModalTags();
-            alertMessage(`Tag '${tagToDelete}' removed successfully.', 'bg-green-600');
+            alertMessage(`Tag '${tagToDelete}' removed successfully.`, 'bg-green-600');
         } else if (response.status === 401) {
             // Token expired or invalid
             alertMessage('Session expired. Please log in again.', 'bg-red-500');
@@ -849,6 +889,12 @@ window.saveDescription = async function() {
             const loginButton = document.getElementById('login-button');
             const userInfo = document.getElementById('user-info');
             const usernameDisplay = document.getElementById('username-display');
+            
+            // Safety check - elements might not exist yet
+            if (!loginButton || !userInfo || !usernameDisplay) {
+                console.warn('[AUTH] UI elements not ready yet, skipping updateAuthUI');
+                return;
+            }
             
             if (isLoggedIn) {
                 loginButton.classList.add('hidden');
@@ -1082,6 +1128,41 @@ window.saveDescription = async function() {
             renderPopularTags();
         };
 
+        // --- URL SHARING FUNCTIONS ---
+        
+        function parseURLParameters() {
+            // Parse URL parameters for image and search sharing
+            try {
+                const params = new URLSearchParams(window.location.search);
+                return {
+                    image: params.get('image'),
+                    search: params.get('search'),
+                    type: params.get('type')
+                };
+            } catch (error) {
+                console.error('[URL] Error parsing URL parameters:', error);
+                return { image: null, search: null, type: null };
+            }
+        }
+        
+        function updateURL(params) {
+            // Update URL without reloading page
+            try {
+                const url = new URL(window.location.href);
+                Object.keys(params).forEach(key => {
+                    if (params[key]) {
+                        url.searchParams.set(key, params[key]);
+                    } else {
+                        url.searchParams.delete(key);
+                    }
+                });
+                window.history.replaceState({}, '', url.toString());
+            } catch (error) {
+                console.error('[URL] Error updating URL:', error);
+                // Non-critical error, continue anyway
+            }
+        }
+        
         // --- INITIALIZATION ---
         
         async function init() {
@@ -1102,6 +1183,9 @@ window.saveDescription = async function() {
             // 2. Load Data
             await loadData();
             
+            // 3. Check URL parameters for shared links
+            const urlParams = parseURLParameters();
+            
             // 3. Attach event listeners
             searchInput.addEventListener('input', filterImages);
             typeFilter.addEventListener('change', filterImages);
@@ -1114,14 +1198,41 @@ window.saveDescription = async function() {
                 }
             });
 
-            // 4. Initial render
+            // 4. Handle URL parameters for sharing
+            if (urlParams.search || urlParams.type) {
+                // Restore search/filter from URL
+                if (urlParams.search) {
+                    searchInput.value = urlParams.search;
+                }
+                if (urlParams.type) {
+                    typeFilter.value = urlParams.type;
+                }
+                filterImages();
+            } else if (urlParams.image) {
+                // Open specific image from URL
+                const sharedImage = ALL_IMAGES.find(img => img.image_id === urlParams.image);
+                if (sharedImage) {
+                    // Show all images first, then open the modal
+                    showRandomBatch();
+                    renderPopularTags();
+                    // Open modal after a short delay to ensure page is rendered
+                    setTimeout(() => openModal(sharedImage), 100);
+                } else {
+                    alertMessage('Shared image not found', 'bg-yellow-500');
+                    showRandomBatch();
+                    renderPopularTags();
+                }
+            } else {
+                // Normal initial render
+                showRandomBatch();
+                renderPopularTags();
+            }
+            
+            // 5. Display total count
             loadingIndicatorElement.classList.add('hidden');
             totalCountElement.textContent = `(${ALL_IMAGES.length})`; // Display total count
             
-            if (ALL_IMAGES.length > 0) {
-                showRandomBatch();
-                renderPopularTags();
-            } else {
+            if (ALL_IMAGES.length === 0) {
                 resultCountElement.textContent = 'Library is empty.';
                 noResultsElement.classList.remove('hidden');
                 loadMoreButton.classList.add('hidden');

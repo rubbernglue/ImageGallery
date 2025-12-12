@@ -3,7 +3,24 @@ import re
 import json
 from PIL import Image
 from PIL.ExifTags import TAGS
+from PIL.TiffImagePlugin import IFDRational
 from datetime import datetime
+from fractions import Fraction
+
+class ExifEncoder(json.JSONEncoder):
+    """Custom JSON encoder for EXIF data types."""
+    def default(self, o):
+        if isinstance(o, IFDRational):
+            return float(o)
+        elif isinstance(o, bytes):
+            try:
+                return o.decode('utf-8', errors='ignore')
+            except:
+                return str(o)
+        elif isinstance(o, Fraction):
+            return float(o)
+        # Let the base class raise TypeError for other non-serializable types
+        return super().default(o)
 
 # IMPORTANT: SET THIS TO YOUR ACTUAL ROOT DIRECTORY CONTAINING 'rollfilm' and 'sheetfilm'
 # Based on your console output, we'll use /opt/media as a placeholder.
@@ -12,6 +29,74 @@ BASE_DIR = '/opt/media'
 
 # Define the expected root folders to simplify parsing
 ROOT_FILM_TYPES = ['rollfilm', 'sheetfilm']
+
+def convert_to_serializable(obj):
+    """Convert EXIF values to JSON-serializable types."""
+    if isinstance(obj, IFDRational):
+        # Convert IFDRational to float
+        return float(obj)
+    elif isinstance(obj, bytes):
+        # Convert bytes to string
+        try:
+            return obj.decode('utf-8', errors='ignore')
+        except:
+            return str(obj)
+    elif isinstance(obj, (list, tuple)):
+        # Recursively convert lists/tuples
+        return [convert_to_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        # Recursively convert dictionaries
+        return {key: convert_to_serializable(value) for key, value in obj.items()}
+    elif hasattr(obj, '__dict__'):
+        # Convert objects with __dict__ to their dict representation
+        return convert_to_serializable(obj.__dict__)
+    else:
+        # Return as-is if already serializable
+        return obj
+
+def format_focal_length(focal_length):
+    """Format focal length nicely (e.g., '50mm' or '24-70mm')."""
+    if not focal_length:
+        return ''
+    try:
+        if isinstance(focal_length, (IFDRational, Fraction)):
+            focal_length = float(focal_length)
+        if isinstance(focal_length, (int, float)):
+            return f"{int(focal_length)}mm"
+        return str(focal_length)
+    except:
+        return str(focal_length)
+
+def format_aperture(f_number):
+    """Format aperture nicely (e.g., 'f/2.8')."""
+    if not f_number:
+        return ''
+    try:
+        if isinstance(f_number, (IFDRational, Fraction)):
+            f_number = float(f_number)
+        if isinstance(f_number, (int, float)):
+            return f"f/{f_number:.1f}"
+        return f"f/{f_number}"
+    except:
+        return str(f_number)
+
+def format_shutter_speed(exposure_time):
+    """Format shutter speed nicely (e.g., '1/1000' or '2s')."""
+    if not exposure_time:
+        return ''
+    try:
+        if isinstance(exposure_time, (IFDRational, Fraction)):
+            exposure_time = float(exposure_time)
+        if isinstance(exposure_time, (int, float)):
+            if exposure_time < 1:
+                # Fast shutter speed - show as fraction
+                return f"1/{int(1/exposure_time)}"
+            else:
+                # Slow shutter speed - show in seconds
+                return f"{exposure_time}s"
+        return str(exposure_time)
+    except:
+        return str(exposure_time)
 
 def extract_exif(image_path):
     """Extract EXIF data from an image file."""
@@ -22,30 +107,31 @@ def extract_exif(image_path):
         if not exif_data:
             return None
         
-        # Convert EXIF tags to readable names
+        # Convert EXIF tags to readable names and make serializable
         exif = {}
         for tag_id, value in exif_data.items():
             tag = TAGS.get(tag_id, tag_id)
-            exif[tag] = value
+            # Convert to serializable format immediately
+            exif[tag] = convert_to_serializable(value)
         
-        # Extract commonly needed fields
+        # Extract and format commonly needed fields
         result = {
-            'camera_make': exif.get('Make', '').strip(),
-            'camera_model': exif.get('Model', '').strip(),
-            'lens_model': exif.get('LensModel', '').strip(),
-            'focal_length': str(exif.get('FocalLength', '')),
-            'aperture': f"f/{exif.get('FNumber', '')}" if exif.get('FNumber') else '',
-            'shutter_speed': str(exif.get('ExposureTime', '')),
-            'iso': str(exif.get('ISOSpeedRatings', '')),
+            'camera_make': str(exif.get('Make', '')).strip() if exif.get('Make') else '',
+            'camera_model': str(exif.get('Model', '')).strip() if exif.get('Model') else '',
+            'lens_model': str(exif.get('LensModel', '')).strip() if exif.get('LensModel') else '',
+            'focal_length': format_focal_length(exif.get('FocalLength')),
+            'aperture': format_aperture(exif.get('FNumber')),
+            'shutter_speed': format_shutter_speed(exif.get('ExposureTime')),
+            'iso': str(exif.get('ISOSpeedRatings', '')) if exif.get('ISOSpeedRatings') else '',
             'date_taken': None,
-            'full_exif': exif  # Store full EXIF for advanced use
+            'exif_data': exif  # Store full EXIF (now serializable)
         }
         
         # Parse date taken
         date_str = exif.get('DateTimeOriginal') or exif.get('DateTime')
         if date_str:
             try:
-                result['date_taken'] = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').isoformat()
+                result['date_taken'] = datetime.strptime(str(date_str), '%Y:%m:%d %H:%M:%S').isoformat()
             except:
                 pass
         
@@ -134,16 +220,17 @@ def scan_library(base_dir):
                         print(f"  Extracting EXIF from: {image_id}")
                         exif = extract_exif(full_path)
                         if exif:
+                            # Make sure all EXIF values are serializable strings/numbers
                             images[image_id].update({
-                                'camera_make': exif.get('camera_make', ''),
-                                'camera_model': exif.get('camera_model', ''),
-                                'lens_model': exif.get('lens_model', ''),
-                                'focal_length': exif.get('focal_length', ''),
-                                'aperture': exif.get('aperture', ''),
-                                'shutter_speed': exif.get('shutter_speed', ''),
-                                'iso': exif.get('iso', ''),
+                                'camera_make': str(exif.get('camera_make', '')),
+                                'camera_model': str(exif.get('camera_model', '')),
+                                'lens_model': str(exif.get('lens_model', '')),
+                                'focal_length': str(exif.get('focal_length', '')),
+                                'aperture': str(exif.get('aperture', '')),
+                                'shutter_speed': str(exif.get('shutter_speed', '')),
+                                'iso': str(exif.get('iso', '')),
                                 'date_taken': exif.get('date_taken', ''),
-                                'exif_data': exif.get('full_exif', {})
+                                'exif_data': exif.get('full_exif', {})  # Already converted to serializable
                             })
 
     # Convert the dictionary of images to a list, ensuring both paths were found
@@ -178,9 +265,36 @@ if __name__ == '__main__':
 
         # 2. Output data to JSON (for frontend demo/testing)
         json_output_path = 'image_data.json'
-        with open(json_output_path, 'w') as f:
-            json.dump(image_list, f, indent=4)
-        print(f"\nSuccessfully generated {json_output_path}")
+        
+        # Make all data JSON-serializable before dumping
+        print(f"\nPreparing data for JSON export...")
+        serializable_list = []
+        errors = 0
+        
+        for img in image_list:
+            try:
+                # Convert the entire image dict to serializable format
+                serializable_img = convert_to_serializable(img)
+                serializable_list.append(serializable_img)
+            except Exception as e:
+                print(f"  Error serializing {img.get('image_id', 'unknown')}: {e}")
+                errors += 1
+        
+        if errors > 0:
+            print(f"  Warning: {errors} images had serialization issues")
+        
+        try:
+            with open(json_output_path, 'w') as f:
+                json.dump(serializable_list, f, indent=4, cls=ExifEncoder, default=str)
+            print(f"Successfully generated {json_output_path}")
+        except Exception as e:
+            print(f"Error writing JSON: {e}")
+            print("Attempting to write with basic serialization...")
+            # Fallback - write without EXIF data
+            basic_list = [{k: v for k, v in img.items() if k != 'exif_data'} for img in serializable_list]
+            with open(json_output_path, 'w') as f:
+                json.dump(basic_list, f, indent=4, default=str)
+            print(f"Successfully generated {json_output_path} (without full EXIF data)")
 
         # 3. Output data to SQL (for PostgreSQL)
         sql_output_path = 'image_inserts.sql'
