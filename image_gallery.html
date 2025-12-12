@@ -124,8 +124,9 @@
                 <!-- Search Input -->
                 <div class="flex-grow">
                     <label for="search-input" class="sr-only">Search Images</label>
-                    <input type="text" id="search-input" placeholder="Search by ID, film stock, batch, or tags..."
+                    <input type="text" id="search-input" placeholder="Search: nikon, tag:landscape date:2024, or tag:portraits 2024-12"
                            class="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
+                    <p class="text-xs text-gray-500 mt-1">Advanced: tag:landscape date:2024 (filters by tag AND date)</p>
                 </div>
                 <!-- Type Filter -->
                 <div>
@@ -170,10 +171,13 @@
         <!-- Gallery Results and Count -->
         <div class="flex justify-between items-center mb-6">
             <p id="result-count" class="text-sm font-medium text-gray-600">Loading initial images...</p>
-            <button id="select-mode-toggle" onclick="toggleSelectMode()" class="auth-required hidden px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
-                Select Multiple
-            </button>
         </div>
+        
+        <!-- Floating Select Multiple Button (sticky) -->
+        <button id="select-mode-toggle" onclick="toggleSelectMode()" class="auth-required hidden fixed bottom-6 right-6 px-6 py-3 bg-indigo-600 text-white rounded-full shadow-xl hover:bg-indigo-700 transition font-medium z-40">
+            <svg class="w-5 h-5 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+            <span id="select-mode-text">Select Multiple</span>
+        </button>
 
         <!-- Image Gallery Grid -->
         <div id="image-gallery" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
@@ -218,10 +222,16 @@
                 <div class="lg:col-span-2">
                     <img id="modal-image" src="" alt="Image Detail" class="w-full h-auto rounded-lg shadow-xl mb-4 max-h-[80vh] object-contain"
                          onerror="this.onerror=null; this.src='https://placehold.co/800x600/6b7280/ffffff?text=Image+Load+Error';">
-                    <a id="download-link" href="#" download class="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-800 font-medium transition mt-2">
-                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                        Download High Resolution
-                    </a>
+                    <div class="flex flex-col space-y-2 mt-2">
+                        <a id="download-link" href="#" download class="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-800 font-medium transition">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                            Download High Resolution
+                        </a>
+                        <button onclick="shareImage()" class="inline-flex items-center text-sm text-green-600 hover:text-green-800 font-medium transition">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
+                            Share This Image
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Metadata and Editing (1/3 width) -->
@@ -273,13 +283,11 @@
                             <!-- Tags are rendered here -->
                         </div>
                         <!-- Tag input (only shown when logged in) -->
-                        <div class="auth-required hidden flex space-x-2">
-                            <input type="text" id="new-tag" placeholder="Add a new tag..."
-                                   class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                            <button onclick="saveTag()"
-                                    class="p-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition duration-150">
-                                Add
-                            </button>
+                        <div class="auth-required hidden">
+                            <input type="text" id="new-tag" placeholder='Add tags: tag1 "tag 2" tag3 (press Enter)'
+                                   class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 mb-1"
+                                   onkeypress="if(event.key==='Enter') saveTag();">
+                            <p class="text-xs text-gray-500">Separate tags with spaces. Use quotes for multi-word tags: "my tag"</p>
                         </div>
                     </div>
 
@@ -498,16 +506,46 @@
             }
         }
 
-        function filterImages() {
+        function parseSearchQuery(query) {
+            // Parse advanced search syntax: tag:value date:value regular-words
+            const filters = {
+                tags: [],
+                dates: [],
+                general: []
+            };
+            
+            // Match patterns like tag:value or "tag:multi word"
+            const regex = /(tag|date):(?:"([^"]+)"|(\S+))|(?:"([^"]+)"|(\S+))/g;
+            let match;
+            
+            while ((match = regex.exec(query)) !== null) {
+                if (match[1] === 'tag') {
+                    // tag:value format
+                    filters.tags.push((match[2] || match[3]).toLowerCase());
+                } else if (match[1] === 'date') {
+                    // date:value format
+                    filters.dates.push((match[2] || match[3]).toLowerCase());
+                } else {
+                    // Regular word or quoted phrase
+                    filters.general.push((match[4] || match[5]).toLowerCase());
+                }
+            }
+            
+            return filters;
+        }
+
+        function filterImages(skipURLUpdate = false) {
             const query = searchInput.value.toLowerCase().trim();
             const filterType = typeFilter.value;
             
-            // Update URL with search parameters
-            updateURL({ 
-                search: query || null, 
-                type: filterType || null,
-                image: null  // Clear image when searching
-            });
+            // Update URL with search parameters (unless skipped for init)
+            if (!skipURLUpdate) {
+                updateURL({ 
+                    search: query || null, 
+                    type: filterType || null,
+                    image: null  // Clear image when searching
+                });
+            }
             
             // If no filter is active, revert to the random view
             if (!query && !filterType) {
@@ -515,15 +553,19 @@
                 return;
             }
 
+            // Parse search query for advanced filters
+            const searchFilters = parseSearchQuery(query);
+
             // 1. Determine which images match the criteria
             filteredImages = ALL_IMAGES.filter(img => {
-                const tagsString = Array.isArray(img.tags) ? img.tags.join(' ') : '';
-                const descriptionString = img.description || '';
-                const cameraString = `${img.camera_make || ''} ${img.camera_model || ''}`;
-                const lensString = img.lens_model || '';
-                const exifString = `${img.focal_length || ''} ${img.aperture || ''} ${img.iso || ''} ${img.shutter_speed || ''}`;
+                const tagsArray = Array.isArray(img.tags) ? img.tags : [];
+                const tagsString = tagsArray.join(' ').toLowerCase();
+                const descriptionString = (img.description || '').toLowerCase();
+                const cameraString = `${img.camera_make || ''} ${img.camera_model || ''}`.toLowerCase();
+                const lensString = (img.lens_model || '').toLowerCase();
+                const exifString = `${img.focal_length || ''} ${img.aperture || ''} ${img.iso || ''} ${img.shutter_speed || ''}`.toLowerCase();
                 
-                // Format date_taken for searching (YYYY-MM-DD and individual components)
+                // Format date_taken for searching
                 let dateString = '';
                 if (img.date_taken) {
                     const date = new Date(img.date_taken);
@@ -533,16 +575,23 @@
                     dateString = `${year} ${month} ${day} ${year}-${month}-${day} ${year}-${month}`;
                 }
 
-                // Search across multiple fields including EXIF data and timestamps
-                const searchString = `${img.image_id} ${img.film_type} ${img.batch_info} ${img.filename_base} ${img.film_stock} ${descriptionString} ${tagsString} ${cameraString} ${lensString} ${exifString} ${dateString}`.toLowerCase();
+                // Check tag filters (tag:value)
+                const matchesTags = searchFilters.tags.length === 0 || 
+                    searchFilters.tags.every(filterTag => tagsArray.some(imgTag => imgTag.toLowerCase().includes(filterTag)));
                 
-                // Text search
-                const matchesQuery = !query || searchString.includes(query);
+                // Check date filters (date:value)
+                const matchesDates = searchFilters.dates.length === 0 || 
+                    searchFilters.dates.every(filterDate => dateString.includes(filterDate));
+                
+                // Check general search (everything)
+                const searchString = `${img.image_id} ${img.film_type} ${img.batch_info} ${img.filename_base} ${img.film_stock} ${descriptionString} ${tagsString} ${cameraString} ${lensString} ${exifString} ${dateString}`.toLowerCase();
+                const matchesGeneral = searchFilters.general.length === 0 || 
+                    searchFilters.general.every(term => searchString.includes(term));
                 
                 // Type filter
                 const matchesType = !filterType || img.film_type === filterType;
 
-                return matchesQuery && matchesType;
+                return matchesTags && matchesDates && matchesGeneral && matchesType;
             });
 
             // 2. Reset the gallery and count for the new filter
@@ -711,29 +760,56 @@
             }
         }
 
+        function parseTagInput(input) {
+            // Parse space-separated tags with support for quoted multi-word tags
+            const tags = [];
+            const regex = /"([^"]+)"|(\S+)/g;
+            let match;
+            
+            while ((match = regex.exec(input)) !== null) {
+                const tag = (match[1] || match[2]).trim().toLowerCase();
+                if (tag) {
+                    tags.push(tag);
+                }
+            }
+            
+            return tags;
+        }
+
         window.saveTag = async function() {
             if (!requireAuth('add tags')) return;
             if (!activeImage) return;
             
             const tagInput = document.getElementById('new-tag');
-            const newTag = tagInput.value.trim().toLowerCase(); // Normalize tag
+            const inputValue = tagInput.value.trim();
             
-            if (!newTag) {
-                alertMessage('Please enter a tag to add.', 'bg-yellow-500');
+            if (!inputValue) {
+                alertMessage('Please enter tags to add.', 'bg-yellow-500');
+                return;
+            }
+
+            // Parse tags from input (supports space-separated and quoted tags)
+            const newTags = parseTagInput(inputValue);
+            
+            if (newTags.length === 0) {
+                alertMessage('No valid tags entered.', 'bg-yellow-500');
                 return;
             }
 
             const currentTags = activeImage.tags ?? [];
             
-            if (currentTags.includes(newTag)) {  
-                alertMessage(`Tag '${newTag}' already exists for this image.`, 'bg-blue-500');
+            // Filter out tags that already exist
+            const tagsToAdd = newTags.filter(tag => !currentTags.includes(tag));
+            
+            if (tagsToAdd.length === 0) {
+                alertMessage('All tags already exist for this image.', 'bg-blue-500');
                 tagInput.value = '';
                 return;
             }
 
 try {
-        // Calculate the new tags array and send it to the API
-        const updatedTags = [...(activeImage.tags || []), newTag].sort();
+        // Merge new tags with existing tags
+        const updatedTags = [...currentTags, ...tagsToAdd].sort();
         
         const headers = { 'Content-Type': 'application/json' };
         if (!authToken) {
@@ -743,7 +819,7 @@ try {
         }
         headers['Authorization'] = `Bearer ${authToken}`;
         
-        console.log('[TAG] Saving tag:', newTag);
+        console.log('[TAG] Saving tags:', tagsToAdd);
         console.log('[TAG] Token:', authToken.substring(0, 10) + '...');
         console.log('[TAG] Image:', activeImage.image_id);
         
@@ -761,7 +837,11 @@ try {
             // Update UI
             renderModalTags();
             tagInput.value = '';
-            alertMessage(`Tag '${newTag}' added successfully.`, 'bg-green-600');
+            
+            const message = tagsToAdd.length === 1 
+                ? `Tag '${tagsToAdd[0]}' added successfully.`
+                : `${tagsToAdd.length} tags added successfully.`;
+            alertMessage(message, 'bg-green-600');
         } else if (response.status === 401) {
             // Token expired or invalid
             const result = await response.json().catch(() => ({ message: 'Authentication expired' }));
@@ -987,13 +1067,14 @@ window.saveDescription = async function() {
         window.toggleSelectMode = function() {
             selectMode = !selectMode;
             const button = document.getElementById('select-mode-toggle');
+            const buttonText = document.getElementById('select-mode-text');
             
             if (selectMode) {
-                button.textContent = 'Exit Select Mode';
+                buttonText.textContent = 'Exit Select Mode';
                 button.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
                 button.classList.add('bg-red-600', 'hover:bg-red-700');
             } else {
-                button.textContent = 'Select Multiple';
+                buttonText.textContent = 'Select Multiple';
                 button.classList.remove('bg-red-600', 'hover:bg-red-700');
                 button.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
                 clearSelection();
@@ -1130,6 +1211,30 @@ window.saveDescription = async function() {
 
         // --- URL SHARING FUNCTIONS ---
         
+        window.shareImage = function() {
+            if (!activeImage) return;
+            
+            // Build clean share URL with only the image parameter
+            const baseURL = window.location.origin + window.location.pathname;
+            const shareURL = `${baseURL}?image=${encodeURIComponent(activeImage.image_id)}`;
+            
+            console.log('[SHARE] Generated share URL:', shareURL);
+            
+            // Copy to clipboard
+            navigator.clipboard.writeText(shareURL).then(() => {
+                alertMessage('Share link copied to clipboard!', 'bg-green-600');
+            }).catch(err => {
+                // Fallback for older browsers
+                const tempInput = document.createElement('input');
+                tempInput.value = shareURL;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+                alertMessage('Share link copied to clipboard!', 'bg-green-600');
+            });
+        };
+        
         function parseURLParameters() {
             // Parse URL parameters for image and search sharing
             try {
@@ -1194,12 +1299,27 @@ window.saveDescription = async function() {
             popularTagsContainer.addEventListener('click', (e) => {
                 if (e.target.tagName === 'BUTTON' && e.target.dataset.tag) {
                     searchInput.value = e.target.dataset.tag;
-                    filterImages();
+                    filterImages(); // This is user-initiated, will update URL
                 }
             });
 
             // 4. Handle URL parameters for sharing
-            if (urlParams.search || urlParams.type) {
+            if (urlParams.image) {
+                // Open specific image from URL (highest priority)
+                const sharedImage = ALL_IMAGES.find(img => img.image_id === urlParams.image);
+                if (sharedImage) {
+                    // Show all images first, then open the modal
+                    showRandomBatch();
+                    renderPopularTags();
+                    // Open modal after a short delay to ensure page is rendered
+                    // The modal will set the URL with the image parameter
+                    setTimeout(() => openModal(sharedImage), 100);
+                } else {
+                    alertMessage('Shared image not found', 'bg-yellow-500');
+                    showRandomBatch();
+                    renderPopularTags();
+                }
+            } else if (urlParams.search || urlParams.type) {
                 // Restore search/filter from URL
                 if (urlParams.search) {
                     searchInput.value = urlParams.search;
@@ -1207,21 +1327,8 @@ window.saveDescription = async function() {
                 if (urlParams.type) {
                     typeFilter.value = urlParams.type;
                 }
-                filterImages();
-            } else if (urlParams.image) {
-                // Open specific image from URL
-                const sharedImage = ALL_IMAGES.find(img => img.image_id === urlParams.image);
-                if (sharedImage) {
-                    // Show all images first, then open the modal
-                    showRandomBatch();
-                    renderPopularTags();
-                    // Open modal after a short delay to ensure page is rendered
-                    setTimeout(() => openModal(sharedImage), 100);
-                } else {
-                    alertMessage('Shared image not found', 'bg-yellow-500');
-                    showRandomBatch();
-                    renderPopularTags();
-                }
+                // Skip URL update during init to preserve search params
+                filterImages(true);
             } else {
                 // Normal initial render
                 showRandomBatch();
