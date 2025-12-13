@@ -68,15 +68,13 @@ else:
 # HELPER FUNCTIONS
 # ============================================================================
 
-def replace_spaces(text):
-    """Replace spaces with underscores for URL-safe names."""
-    return text.replace(' ', '_')
-
-def translate_path_for_db(scanner_path):
-    """Translate scanner path to database path."""
-    if scanner_path.startswith(PATH_SCANNER):
-        return scanner_path.replace(PATH_SCANNER, PATH_DATABASE, 1)
-    return scanner_path
+def sanitize_filename(text):
+    """Sanitize filename for URL-safe and filesystem-safe names."""
+    # Replace spaces with underscores
+    text = text.replace(' ', '_')
+    # Replace # with n (hash symbols can cause issues in URLs and shells)
+    text = text.replace('#', 'n')
+    return text
 
 def translate_path_for_db(scanner_path):
     """Translate scanner path to database path."""
@@ -401,7 +399,7 @@ def process_all():
             try:
                 source_batch_dir = os.path.realpath(entry.path)
                 source_batch_name = entry.name
-                target_batch_name = replace_spaces(source_batch_name)
+                target_batch_name = sanitize_filename(source_batch_name)
                 target_batch_dir = os.path.join(TARGET_LIBRARY, film_type, target_batch_name)
                 
                 os.makedirs(target_batch_dir, exist_ok=True)
@@ -424,7 +422,7 @@ def process_all():
                     
                     filename = image_file.name
                     basename = os.path.splitext(filename)[0]
-                    basename_clean = replace_spaces(basename)
+                    basename_clean = sanitize_filename(basename)
                     
                     # Create output structure
                     image_dir = os.path.join(target_batch_dir, basename_clean)
