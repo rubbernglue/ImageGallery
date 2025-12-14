@@ -3,9 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collaborative Image Gallery</title>
-    <!-- Load Tailwind CSS -->
+    <title>Shared Film Archive</title>
+    
+    <!-- Open Graph Meta Tags for Link Previews -->
+    <meta property="og:title" content="Shared Film Archive" id="og-title">
+    <meta property="og:description" content="Browse film photography archive" id="og-description">
+    <meta property="og:image" content="" id="og-image">
+    <meta property="og:url" content="" id="og-url">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+    
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet.js for GPS maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         /* Custom styles for smoother transitions and effects */
         :root {
@@ -70,7 +82,7 @@
             max-width: none !important;
             cursor: move;
             position: fixed;
-            z-index: 52 !important;
+            z-index: 1002 !important;
             transition: transform 0.1s ease-out;
             box-shadow: 0 20px 50px rgba(0,0,0,0.8);
         }
@@ -83,7 +95,7 @@
             right: 0;
             bottom: 0;
             background: transparent; /* No dark background */
-            z-index: 51;
+            z-index: 1001;
             cursor: zoom-out;
         }
         #zoom-overlay.active {
@@ -99,19 +111,27 @@
             padding: 8px 16px;
             border-radius: 20px;
             font-size: 12px;
-            z-index: 53;
+            z-index: 1003;
             pointer-events: none;
+        }
+        /* Ensure map stays below zoomed image */
+        #gps-map-container {
+            position: relative;
+            z-index: 1;
         }
     </style>
 </head>
-<body class="bg-gray-50 font-sans">
+<body class="bg-gray-200 font-sans">
 
     <!-- Header -->
     <header class="bg-white shadow-sm sticky top-0 z-10">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div class="flex justify-between items-center">
                 <h1 class="text-2xl font-bold text-gray-900">
-                    Shared Film Archive <span id="total-count" class="text-gray-400 text-base font-normal"></span>
+                    <a href="?" class="hover:text-indigo-600 transition cursor-pointer" onclick="resetPage(event)">
+                        Shared Film Archive
+                    </a>
+                    <span id="total-count" class="text-gray-400 text-base font-normal"></span>
                 </h1>
                 <div id="auth-section">
                     <button id="login-button" onclick="showLoginDialog()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
@@ -153,6 +173,36 @@
         </div>
     </div>
 
+    <!-- Bulk Tag Modal -->
+    <div id="bulk-tag-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <h2 class="text-2xl font-bold mb-2">Add Tags to Selected Images</h2>
+            <p class="text-gray-600 mb-6"><span id="bulk-tag-count">0</span> images selected</p>
+            <div class="mb-6 relative">
+                <label for="bulk-tag-input" class="block text-sm font-medium text-gray-700 mb-2">Tags</label>
+                <input type="text" id="bulk-tag-input" placeholder='tag1 "tag 2" tag3'
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                       oninput="showBulkTagSuggestions(event)"
+                       onblur="hideBulkTagSuggestions()"
+                       onkeypress="if(event.key==='Enter') confirmBulkTag()"
+                       autocomplete="off">
+                <!-- Bulk tag suggestions dropdown -->
+                <div id="bulk-tag-suggestions" class="hidden absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                    <!-- Suggestions appear here -->
+                </div>
+                <p class="text-xs text-gray-500 mt-1">Separate with spaces. Use quotes for multi-word tags.</p>
+            </div>
+            <div class="flex space-x-3">
+                <button type="button" onclick="confirmBulkTag()" class="flex-1 px-4 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition font-medium">
+                    Add Tags
+                </button>
+                <button type="button" onclick="hideBulkTagDialog()" class="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
         <!-- Controls Section -->
@@ -189,18 +239,19 @@
             </div>
         </section>
 
-        <!-- Multi-select Toolbar (hidden by default) -->
-        <div id="multi-select-toolbar" class="bg-indigo-600 text-white p-4 rounded-xl shadow-lg mb-6 hidden">
-            <div class="flex justify-between items-center">
+        <!-- Multi-select Toolbar (sticky, hidden by default) -->
+        <div id="multi-select-toolbar" class="fixed top-20 right-6 bg-white border-2 border-indigo-600 p-4 rounded-xl shadow-2xl hidden z-30 max-w-xs">
+            <div class="space-y-3">
                 <div>
-                    <span id="selected-count" class="font-semibold">0 images selected</span>
+                    <span id="selected-count" class="font-semibold text-gray-900 block">0 images selected</span>
+                    <p class="text-xs text-gray-600 mt-1">💡 Shift+Click for range</p>
                 </div>
-                <div class="flex space-x-3">
-                    <button onclick="bulkTagImages()" class="px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-indigo-50 transition font-medium">
-                        Add Tags to Selected
+                <div class="flex space-x-2">
+                    <button onclick="bulkTagImages()" class="flex-1 px-4 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition font-medium flex items-center justify-center">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                     </button>
-                    <button onclick="clearSelection()" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-700 rounded-lg transition">
-                        Clear Selection
+                    <button onclick="clearSelection()" class="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                        Clear
                     </button>
                 </div>
             </div>
@@ -211,10 +262,9 @@
             <p id="result-count" class="text-sm font-medium text-gray-600">Loading initial images...</p>
         </div>
         
-        <!-- Floating Select Multiple Button (sticky) -->
-        <button id="select-mode-toggle" onclick="toggleSelectMode()" class="auth-required hidden fixed bottom-6 right-6 px-6 py-3 bg-indigo-600 text-white rounded-full shadow-xl hover:bg-indigo-700 transition font-medium z-40">
-            <svg class="w-5 h-5 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
-            <span id="select-mode-text">Select Multiple</span>
+        <!-- Floating Select Multiple Button (round icon only) -->
+        <button id="select-mode-toggle" onclick="toggleSelectMode()" class="auth-required hidden fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-xl hover:bg-indigo-700 transition flex items-center justify-center z-40" title="Select Multiple Images">
+            <svg id="select-mode-icon" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
         </button>
 
         <!-- Image Gallery Grid -->
@@ -235,7 +285,20 @@
             <p class="text-gray-400 mt-2">Try adjusting your search query or filters.</p>
         </div>
 
-        <!-- Load More/Refresh Button -->
+        <!-- Pagination Controls (for search results) -->
+        <div id="pagination-controls" class="hidden flex justify-center items-center space-x-2 mt-10">
+            <button onclick="goToPage(currentPage - 1)" id="prev-page" class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                ← Previous
+            </button>
+            <div id="page-numbers" class="flex space-x-1">
+                <!-- Page numbers appear here -->
+            </div>
+            <button onclick="goToPage(currentPage + 1)" id="next-page" class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                Next →
+            </button>
+        </div>
+
+        <!-- Load More/Refresh Button (for random view) -->
         <div class="text-center mt-10">
             <button id="load-more-button" onclick="handleLoadButtonAction()"
                     class="hidden px-6 py-3 bg-indigo-600 text-white font-semibold rounded-xl shadow-lg hover:bg-indigo-700 transition duration-150 transform hover:scale-[1.01]">
@@ -267,6 +330,17 @@
                          class="w-full h-auto rounded-lg shadow-xl mb-4 max-h-[80vh] object-contain cursor-zoom-in transition-transform duration-300"
                          onclick="toggleImageZoom(event)"
                          onerror="this.onerror=null; this.src='https://placehold.co/800x600/6b7280/ffffff?text=Image+Load+Error';">
+                    
+                    <!-- GPS Map (shown if GPS data available) -->
+                    <div id="gps-map-container" class="hidden mb-4">
+                        <h3 class="text-sm font-semibold text-gray-800 mb-2">Location</h3>
+                        <div id="gps-map" class="w-full h-64 rounded-lg shadow-lg bg-gray-200"></div>
+                        <p class="text-xs text-gray-600 mt-1">
+                            <span id="gps-coords"></span>
+                            <a id="gps-maps-link" href="#" target="_blank" class="text-indigo-600 hover:text-indigo-800 ml-2">Open in Google Maps</a>
+                        </p>
+                    </div>
+                    
                     <div class="flex flex-col space-y-2 mt-2">
                         <a id="download-link" href="#" download class="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-800 font-medium transition">
                             <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
@@ -276,6 +350,12 @@
                             <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
                             Share This Image
                         </button>
+                        <!-- Reload checkbox (only for logged in users) -->
+                        <label class="auth-required hidden inline-flex items-center text-sm text-orange-600 hover:text-orange-800 font-medium transition cursor-pointer">
+                            <input type="checkbox" id="reload-checkbox" onchange="toggleReloadFlag()" class="mr-2 w-4 h-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            Mark for Reload
+                        </label>
                     </div>
                 </div>
 
@@ -287,7 +367,6 @@
                     <div class="space-y-2 text-sm">
                         <p class="text-gray-700"><strong class="font-medium text-gray-500">ID:</strong> <span id="modal-id" class="break-all"></span></p>
                         <p class="text-gray-700"><strong class="font-medium text-gray-500">Type:</strong> <span id="modal-type"></span></p>
-                        <p class="text-gray-700"><strong class="font-medium text-gray-500">Stock:</strong> <span id="modal-stock"></span></p>
                         <p class="text-gray-700"><strong class="font-medium text-gray-500">Batch:</strong> <span id="modal-batch"></span></p>
                     </div>
                     
@@ -328,10 +407,17 @@
                             <!-- Tags are rendered here -->
                         </div>
                         <!-- Tag input (only shown when logged in) -->
-                        <div class="auth-required hidden">
+                        <div class="auth-required hidden relative">
                             <input type="text" id="new-tag" placeholder='Add tags: tag1 "tag 2" tag3 (press Enter)'
                                    class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 mb-1"
-                                   onkeypress="if(event.key==='Enter') saveTag();">
+                                   onkeypress="if(event.key==='Enter') saveTag();"
+                                   oninput="showTagSuggestions(event)"
+                                   onblur="hideTagSuggestions()"
+                                   autocomplete="off">
+                            <!-- Tag suggestions dropdown -->
+                            <div id="tag-suggestions" class="hidden absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                                <!-- Suggestions appear here -->
+                            </div>
                             <p class="text-xs text-gray-500">Separate tags with spaces. Use quotes for multi-word tags: "my tag"</p>
                         </div>
                     </div>
@@ -356,9 +442,16 @@
         let activeImage = null; // The image currently open in the modal
         let selectMode = false; // Multi-select mode
         let selectedImages = new Set(); // Set of selected image_ids
+        let lastSelectedIndex = -1; // For shift-click range selection
         let isLoggedIn = false; // User authentication state
         let currentUsername = null; // Current logged in username
         let authToken = null; // Authentication token
+        
+        // Pagination state
+        let currentPage = 1;
+        let itemsPerPage = 25;
+        let totalPages = 1;
+        let isRandomView = true; // Track if we're in random or paginated view
         
         // --- ELEMENTS (Assigned in init) ---
         let galleryElement, searchInput, typeFilter, resultCountElement, noResultsElement, loadingIndicatorElement, loadMoreButton, popularTagsContainer, totalCountElement;
@@ -449,7 +542,7 @@
             card.onclick = (e) => {
                 if (selectMode) {
                     e.stopPropagation();
-                    toggleImageSelection(image.image_id, card);
+                    toggleImageSelection(image.image_id, card, e.shiftKey);
                 } else {
                     openModal(image);
                 }
@@ -459,6 +552,11 @@
             const webUrl = filePathToWebUrl(image.thumbnail_path);
             
             const checkboxIcon = isSelected ? '<svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : '';
+
+            // Display film stock, or just film type if stock is unknown
+            const stockDisplay = image.film_stock && image.film_stock !== 'Unknown' 
+                ? `${image.film_stock} (${image.film_type})`
+                : image.film_type;
 
             card.innerHTML = `
                 <div class="aspect-[3/2] relative">
@@ -471,7 +569,7 @@
                 </div>
                 <div class="p-3">
                     <h3 class="text-sm font-semibold text-gray-800 truncate">${title}</h3>
-                    <p class="text-xs text-indigo-600 font-medium mt-1">${image.film_stock} (${image.film_type})</p>
+                    <p class="text-xs text-indigo-600 font-medium mt-1">${stockDisplay}</p>
                     <p class="text-xs text-gray-400 truncate mt-1">${image.description || 'No description'}</p>
                 </div>
             `;
@@ -579,7 +677,7 @@
             return filters;
         }
 
-        function filterImages(skipURLUpdate = false) {
+        function filterImages(skipURLUpdate = false, page = 1) {
             const query = searchInput.value.toLowerCase().trim();
             const filterType = typeFilter.value;
             
@@ -594,9 +692,13 @@
             
             // If no filter is active, revert to the random view
             if (!query && !filterType) {
+                isRandomView = true;
                 showRandomBatch();
                 return;
             }
+            
+            isRandomView = false; // We're in search/filter mode
+            currentPage = page;
 
             // Parse search query for advanced filters
             const searchFilters = parseSearchQuery(query);
@@ -639,13 +741,41 @@
                 return matchesTags && matchesDates && matchesGeneral && matchesType;
             });
 
-            // 2. Reset the gallery and count for the new filter
+            // 2. Calculate pagination
+            totalPages = Math.ceil(filteredImages.length / itemsPerPage);
+            
+            // 3. Reset the gallery
             galleryElement.innerHTML = '';
             imagesRenderedCount = 0;
             
-            // 3. Render results - show all if less than 100, otherwise batch
-            const initialBatchSize = filteredImages.length < 100 ? filteredImages.length : INITIAL_LOAD_COUNT;
-            renderGalleryBatch(initialBatchSize, false);
+            // 4. Render current page (25 items per page)
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const pageImages = filteredImages.slice(startIndex, endIndex);
+            
+            // Render this page's images
+            pageImages.forEach(img => {
+                const card = renderImageCard(img);
+                galleryElement.appendChild(card);
+            });
+            
+            imagesRenderedCount = pageImages.length;
+            
+            // 5. Update result count
+            resultCountElement.textContent = `Showing ${startIndex + 1}-${Math.min(endIndex, filteredImages.length)} of ${filteredImages.length} results`;
+            
+            // 6. Show/hide pagination
+            updatePaginationUI();
+            
+            // 7. Hide load more button (using pagination instead)
+            loadMoreButton.classList.add('hidden');
+            
+            // 8. Show no results message if needed
+            if (filteredImages.length === 0) {
+                noResultsElement.classList.remove('hidden');
+            } else {
+                noResultsElement.classList.add('hidden');
+            }
         }
 
         // Render top 20 popular tags for quick access
@@ -677,9 +807,147 @@
             }
         }
 
+        // --- GPS MAP FUNCTIONS ---
+        
+        let currentMap = null; // Store current Leaflet map instance
+        
+        function extractGPSCoordinates(image) {
+            // Try to extract GPS from exif_data
+            console.log('[GPS] Checking for GPS data in image:', image.image_id);
+            console.log('[GPS] Has exif_data?', !!image.exif_data);
+            
+            if (image.exif_data && image.exif_data.GPSInfo) {
+                console.log('[GPS] Found GPSInfo:', image.exif_data.GPSInfo);
+                const gps = image.exif_data.GPSInfo;
+                
+                // Parse GPS coordinates from EXIF format
+                try {
+                    let lat = null, lon = null;
+                    let latRef = null, lonRef = null;
+                    let latDeg = null, lonDeg = null;
+                    
+                    // GPS data can have either named keys or numeric keys
+                    // Named format: GPSLatitude, GPSLongitude
+                    // Numeric format: 1="N", 2=[lat], 3="E", 4=[lon]
+                    
+                    if (gps.GPSLatitude && gps.GPSLongitude) {
+                        // Named format
+                        latDeg = gps.GPSLatitude;
+                        lonDeg = gps.GPSLongitude;
+                        latRef = gps.GPSLatitudeRef;
+                        lonRef = gps.GPSLongitudeRef;
+                    } else if (gps[2] && gps[4]) {
+                        // Numeric format (EXIF tag numbers)
+                        // Tag 1 = GPSLatitudeRef, 2 = GPSLatitude
+                        // Tag 3 = GPSLongitudeRef, 4 = GPSLongitude
+                        latDeg = gps[2];
+                        lonDeg = gps[4];
+                        latRef = gps[1];
+                        lonRef = gps[3];
+                    }
+                    
+                    if (Array.isArray(latDeg) && Array.isArray(lonDeg) && latDeg.length >= 3 && lonDeg.length >= 3) {
+                        // Convert from degrees/minutes/seconds to decimal
+                        lat = latDeg[0] + latDeg[1]/60 + latDeg[2]/3600;
+                        lon = lonDeg[0] + lonDeg[1]/60 + lonDeg[2]/3600;
+                        
+                        // Apply direction (N/S/E/W)
+                        if (latRef === 'S') lat = -lat;
+                        if (lonRef === 'W') lon = -lon;
+                        
+                        console.log('[GPS] Parsed coordinates:', { lat, lon });
+                        return { lat, lon };
+                    }
+                } catch (e) {
+                    console.error('[GPS] Error parsing GPS:', e);
+                }
+            }
+            
+            console.log('[GPS] No GPS data found');
+            return null;
+        }
+        
+        function renderGPSMap(image) {
+            const mapContainer = document.getElementById('gps-map-container');
+            const mapDiv = document.getElementById('gps-map');
+            const coordsSpan = document.getElementById('gps-coords');
+            const mapsLink = document.getElementById('gps-maps-link');
+            
+            // Clean up previous map
+            if (currentMap) {
+                currentMap.remove();
+                currentMap = null;
+            }
+            
+            const gps = extractGPSCoordinates(image);
+            
+            console.log('[GPS] Extracted coordinates:', gps);
+            
+            if (gps) {
+                console.log('[GPS] Rendering map at:', gps.lat, gps.lon);
+                mapContainer.classList.remove('hidden');
+                
+                // Display coordinates
+                coordsSpan.textContent = `${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}`;
+                mapsLink.href = `https://www.google.com/maps?q=${gps.lat},${gps.lon}`;
+                
+                // Create Leaflet map
+                setTimeout(() => {
+                    currentMap = L.map('gps-map').setView([gps.lat, gps.lon], 13);
+                    
+                    // Add OpenStreetMap tiles
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors',
+                        maxZoom: 19
+                    }).addTo(currentMap);
+                    
+                    // Add marker
+                    L.marker([gps.lat, gps.lon]).addTo(currentMap)
+                        .bindPopup(image.filename_base || 'Photo location')
+                        .openPopup();
+                }, 100); // Small delay to ensure div is rendered
+            } else {
+                mapContainer.classList.add('hidden');
+            }
+        }
+        
+        // --- OPEN GRAPH META TAGS ---
+        
+        function updateOpenGraphTags(image, imageUrl) {
+            // Update meta tags for social media sharing
+            const title = image.filename_base || 'Film Archive Image';
+            const description = image.description || `${image.film_type} - Batch ${image.batch_info}`;
+            const url = window.location.href;
+            
+            // Get absolute URL for thumbnail image (use 600px for faster loading in previews)
+            const thumbnailUrl = filePathToWebUrl(image.thumbnail_path);
+            const absoluteImageUrl = thumbnailUrl.startsWith('http') 
+                ? thumbnailUrl 
+                : window.location.origin + thumbnailUrl;
+            
+            console.log('[OG] Updating Open Graph tags');
+            console.log('[OG] Title:', title);
+            console.log('[OG] Image:', absoluteImageUrl);
+            console.log('[OG] URL:', url);
+            
+            document.getElementById('og-title').setAttribute('content', title);
+            document.getElementById('og-description').setAttribute('content', description);
+            document.getElementById('og-image').setAttribute('content', absoluteImageUrl);
+            document.getElementById('og-url').setAttribute('content', url);
+            
+            // Also update page title
+            document.title = `${title} - Shared Film Archive`;
+        }
+        
         // --- MODAL FUNCTIONS ---
         
-        let zoomScale = 2.0; // 2x zoom for better detail viewing
+        // Zoom configuration
+        // Change this value to adjust zoom level:
+        //   2.0 = 2x zoom
+        //   3.0 = 3x zoom (more detail)
+        //   4.0 = 4x zoom (maximum detail)
+        //   5.0 = 5x zoom (very close inspection)
+        const zoomScale = 2.0;  // Increased for better detail viewing
         
         window.toggleImageZoom = function(event) {
             event.stopPropagation(); // Prevent modal from closing
@@ -784,6 +1052,42 @@
             }).join('');
         }
 
+        window.toggleReloadFlag = async function() {
+            if (!activeImage) return;
+            
+            const checkbox = document.getElementById('reload-checkbox');
+            const needsReload = checkbox.checked;
+            
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (authToken) {
+                    headers['Authorization'] = `Bearer ${authToken}`;
+                }
+                
+                const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(activeImage.image_id)}/reload`, {
+                    method: 'PUT',
+                    headers: headers,
+                    body: JSON.stringify({ needs_reload: needsReload })
+                });
+                
+                if (response.ok) {
+                    activeImage.needs_reload = needsReload;
+                    const msg = needsReload 
+                        ? 'Marked for reload - will be reprocessed on next update'
+                        : 'Reload flag cleared';
+                    alertMessage(msg, 'bg-orange-500');
+                } else if (response.status === 401) {
+                    alertMessage('Session expired. Please log in again.', 'bg-red-500');
+                    logout();
+                } else {
+                    alertMessage('Failed to update reload flag', 'bg-red-500');
+                }
+            } catch (error) {
+                console.error('[RELOAD] Error:', error);
+                alertMessage('Could not connect to server', 'bg-red-500');
+            }
+        };
+
         function openModal(image) {
             activeImage = image;
             const modal = document.getElementById('detail-modal');
@@ -791,14 +1095,32 @@
             // Update URL for sharing (without reloading page)
             updateURL({ image: image.image_id });
             
+            // Set reload checkbox state
+            const reloadCheckbox = document.getElementById('reload-checkbox');
+            if (reloadCheckbox) {
+                reloadCheckbox.checked = image.needs_reload || false;
+            }
+            
             const highResWebUrl = filePathToWebUrl(image.highres_path);
             
             document.getElementById('modal-image').src = highResWebUrl;
             document.getElementById('modal-title').textContent = image.filename_base || image.image_id.split('/').pop();
             document.getElementById('modal-id').textContent = image.image_id;
             document.getElementById('modal-type').textContent = image.film_type;
-            document.getElementById('modal-stock').textContent = image.film_stock;
-            document.getElementById('modal-batch').textContent = image.batch_info;
+            
+            // Extract initial number sequence from batch_info
+            // Examples: 
+            //   "100_2013_Bronica..." → "100"
+            //   "4x5_0201-0204_2020" → "4x5_0201-0204"
+            //   "5x7_0001-0005" → "5x7_0001-0005"
+            let batchDisplay = image.batch_info;
+            
+            // Match patterns like: "4x5_0353-0356" or "100" or "645"
+            const batchMatch = image.batch_info.match(/^(\d+x\d+_[\d\-]+|\d+[\d\-]*)/);
+            if (batchMatch) {
+                batchDisplay = batchMatch[1];
+            }
+            document.getElementById('modal-batch').textContent = batchDisplay;
             document.getElementById('download-link').href = highResWebUrl;
             
             // Display EXIF data if available
@@ -832,6 +1154,12 @@
             } else {
                 exifSection.classList.add('hidden');
             }
+            
+            // Display GPS map if GPS data available
+            renderGPSMap(image);
+            
+            // Update Open Graph meta tags for sharing
+            updateOpenGraphTags(image, highResWebUrl);
             
             // Set description in both read-only and editable fields
             const description = image.description || 'No description yet';
@@ -910,6 +1238,74 @@
             return tags;
         }
 
+        function getAllExistingTags() {
+            // Get all unique tags from the database
+            const tagSet = new Set();
+            ALL_IMAGES.forEach(img => {
+                if (Array.isArray(img.tags)) {
+                    img.tags.forEach(tag => tagSet.add(tag.toLowerCase()));
+                }
+            });
+            return Array.from(tagSet).sort();
+        }
+
+        window.showTagSuggestions = function(event) {
+            const input = event.target;
+            const value = input.value;
+            const suggestionsDiv = document.getElementById('tag-suggestions');
+            
+            // Get the last word being typed (after last space or quote)
+            const lastSpaceIndex = Math.max(value.lastIndexOf(' '), value.lastIndexOf('"'));
+            const currentWord = value.substring(lastSpaceIndex + 1).trim().toLowerCase();
+            
+            if (currentWord.length < 2) {
+                suggestionsDiv.classList.add('hidden');
+                return;
+            }
+            
+            // Find matching tags
+            const allTags = getAllExistingTags();
+            const matches = allTags.filter(tag => 
+                tag.startsWith(currentWord) && tag !== currentWord
+            ).slice(0, 10); // Limit to 10 suggestions
+            
+            if (matches.length === 0) {
+                suggestionsDiv.classList.add('hidden');
+                return;
+            }
+            
+            // Render suggestions
+            suggestionsDiv.innerHTML = matches.map(tag => `
+                <div class="px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                     onmousedown="selectTagSuggestion('${tag}')">
+                    <span class="text-sm text-gray-800">${tag}</span>
+                </div>
+            `).join('');
+            
+            suggestionsDiv.classList.remove('hidden');
+        };
+
+        window.hideTagSuggestions = function() {
+            // Delay to allow click to register
+            setTimeout(() => {
+                document.getElementById('tag-suggestions').classList.add('hidden');
+            }, 200);
+        };
+
+        window.selectTagSuggestion = function(tag) {
+            const input = document.getElementById('new-tag');
+            const value = input.value;
+            
+            // Replace the current word with the selected tag
+            const lastSpaceIndex = Math.max(value.lastIndexOf(' '), value.lastIndexOf('"'));
+            const newValue = value.substring(0, lastSpaceIndex + 1) + tag + ' ';
+            
+            input.value = newValue;
+            input.focus();
+            
+            document.getElementById('tag-suggestions').classList.add('hidden');
+        };
+
         window.saveTag = async function() {
             if (!requireAuth('add tags')) return;
             if (!activeImage) return;
@@ -963,7 +1359,12 @@ try {
             body: JSON.stringify({ tags: updatedTags })
         });
 
+        console.log('[TAG] Response status:', response.status);
+
         if (response.ok) {
+            const result = await response.json();
+            console.log('[TAG] Response data:', result);
+            
             // Update local state (activeImage and ALL_IMAGES)
             activeImage.tags = updatedTags;
             updateLocalImage(activeImage.image_id, { tags: updatedTags });
@@ -978,18 +1379,20 @@ try {
             alertMessage(message, 'bg-green-600');
         } else if (response.status === 401) {
             // Token expired or invalid
-            const result = await response.json().catch(() => ({ message: 'Authentication expired' }));
+            const result = await response.json().catch(() => ({ message: 'Authentication error' }));
+            console.error('[TAG] Auth error:', result);
             alertMessage('Session expired. Please log in again.', 'bg-red-500');
             logout();
         } else {
             const result = await response.json().catch(() => ({ message: 'Unknown server error.' }));
+            console.error('[TAG] Error response:', response.status, result);
             alertMessage(`Error: ${result.message}`, 'bg-red-500');
         }
     } catch (error) {
-        console.error("API Error during tag save:", error);
+        console.error("[TAG] API Error during tag save:", error);
         alertMessage('Could not connect to the API server.', 'bg-red-500');
     }
-}
+};
     
 window.deleteTag = async function(event, tagToDelete) {
     event.stopPropagation();
@@ -1201,16 +1604,20 @@ window.saveDescription = async function() {
         window.toggleSelectMode = function() {
             selectMode = !selectMode;
             const button = document.getElementById('select-mode-toggle');
-            const buttonText = document.getElementById('select-mode-text');
+            const icon = document.getElementById('select-mode-icon');
             
             if (selectMode) {
-                buttonText.textContent = 'Exit Select Mode';
+                // Exit select mode - show X icon
                 button.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
                 button.classList.add('bg-red-600', 'hover:bg-red-700');
+                button.title = 'Exit Select Mode';
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>';
             } else {
-                buttonText.textContent = 'Select Multiple';
+                // Enter select mode - show checkbox icon
                 button.classList.remove('bg-red-600', 'hover:bg-red-700');
                 button.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+                button.title = 'Select Multiple Images';
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>';
                 clearSelection();
             }
             
@@ -1235,17 +1642,50 @@ window.saveDescription = async function() {
             });
         };
 
-        function toggleImageSelection(imageId, cardElement) {
-            if (selectedImages.has(imageId)) {
-                selectedImages.delete(imageId);
-                cardElement.classList.remove('selected');
-                const checkbox = cardElement.querySelector('.selection-checkbox');
-                checkbox.innerHTML = '';
+        function toggleImageSelection(imageId, cardElement, shiftKey = false) {
+            const currentIndex = filteredImages.findIndex(img => img.image_id === imageId);
+            
+            if (shiftKey && lastSelectedIndex >= 0 && currentIndex >= 0) {
+                // Shift-click: select range
+                const start = Math.min(lastSelectedIndex, currentIndex);
+                const end = Math.max(lastSelectedIndex, currentIndex);
+                
+                // Select all images in range
+                for (let i = start; i <= end; i++) {
+                    const img = filteredImages[i];
+                    selectedImages.add(img.image_id);
+                    
+                    // Update UI for cards that are rendered
+                    const cards = document.querySelectorAll('.image-card');
+                    cards.forEach(card => {
+                        // Find card by checking its onclick behavior or data
+                        const cardImg = card.querySelector('img');
+                        if (cardImg && cardImg.alt === (img.filename_base || img.image_id.split('/').pop())) {
+                            card.classList.add('selected');
+                            const checkbox = card.querySelector('.selection-checkbox');
+                            if (checkbox) {
+                                checkbox.innerHTML = '<svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>';
+                            }
+                        }
+                    });
+                }
+                
+                lastSelectedIndex = currentIndex;
             } else {
-                selectedImages.add(imageId);
-                cardElement.classList.add('selected');
-                const checkbox = cardElement.querySelector('.selection-checkbox');
-                checkbox.innerHTML = '<svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>';
+                // Regular click: toggle single image
+                if (selectedImages.has(imageId)) {
+                    selectedImages.delete(imageId);
+                    cardElement.classList.remove('selected');
+                    const checkbox = cardElement.querySelector('.selection-checkbox');
+                    checkbox.innerHTML = '';
+                } else {
+                    selectedImages.add(imageId);
+                    cardElement.classList.add('selected');
+                    const checkbox = cardElement.querySelector('.selection-checkbox');
+                    checkbox.innerHTML = '<svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>';
+                }
+                
+                lastSelectedIndex = currentIndex;
             }
             
             updateMultiSelectToolbar();
@@ -1277,7 +1717,7 @@ window.saveDescription = async function() {
             });
         };
 
-        window.bulkTagImages = async function() {
+        window.bulkTagImages = function() {
             if (selectedImages.size === 0) {
                 alertMessage('No images selected', 'bg-yellow-500');
                 return;
@@ -1288,61 +1728,286 @@ window.saveDescription = async function() {
                 return;
             }
 
-            const newTags = prompt(`Enter tags to add to ${selectedImages.size} selected image(s) (comma-separated):`);
-            if (!newTags) return;
+            // Show bulk tag modal
+            document.getElementById('bulk-tag-count').textContent = selectedImages.size;
+            document.getElementById('bulk-tag-input').value = '';
+            document.getElementById('bulk-tag-modal').classList.remove('hidden');
+            setTimeout(() => document.getElementById('bulk-tag-input').focus(), 100);
+        };
 
-            const tagsArray = newTags.split(',').map(tag => tag.trim().toLowerCase()).filter(tag => tag);
+        window.hideBulkTagDialog = function() {
+            document.getElementById('bulk-tag-modal').classList.add('hidden');
+            document.getElementById('bulk-tag-input').value = '';
+            document.getElementById('bulk-tag-suggestions').classList.add('hidden');
+        };
+
+        window.showBulkTagSuggestions = function(event) {
+            const input = event.target;
+            const value = input.value;
+            const suggestionsDiv = document.getElementById('bulk-tag-suggestions');
+            
+            // Get the last word being typed
+            const lastSpaceIndex = Math.max(value.lastIndexOf(' '), value.lastIndexOf('"'));
+            const currentWord = value.substring(lastSpaceIndex + 1).trim().toLowerCase();
+            
+            if (currentWord.length < 2) {
+                suggestionsDiv.classList.add('hidden');
+                return;
+            }
+            
+            // Find matching tags
+            const allTags = getAllExistingTags();
+            const matches = allTags.filter(tag => 
+                tag.startsWith(currentWord) && tag !== currentWord
+            ).slice(0, 10);
+            
+            if (matches.length === 0) {
+                suggestionsDiv.classList.add('hidden');
+                return;
+            }
+            
+            // Render suggestions
+            suggestionsDiv.innerHTML = matches.map(tag => `
+                <div class="px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                     onmousedown="selectBulkTagSuggestion('${tag}')">
+                    <span class="text-sm text-gray-800">${tag}</span>
+                </div>
+            `).join('');
+            
+            suggestionsDiv.classList.remove('hidden');
+        };
+
+        window.hideBulkTagSuggestions = function() {
+            setTimeout(() => {
+                document.getElementById('bulk-tag-suggestions').classList.add('hidden');
+            }, 200);
+        };
+
+        window.selectBulkTagSuggestion = function(tag) {
+            const input = document.getElementById('bulk-tag-input');
+            const value = input.value;
+            
+            // Replace the current word with the selected tag
+            const lastSpaceIndex = Math.max(value.lastIndexOf(' '), value.lastIndexOf('"'));
+            const newValue = value.substring(0, lastSpaceIndex + 1) + tag + ' ';
+            
+            input.value = newValue;
+            input.focus();
+            
+            document.getElementById('bulk-tag-suggestions').classList.add('hidden');
+        };
+
+        window.confirmBulkTag = async function() {
+            const newTags = document.getElementById('bulk-tag-input').value.trim();
+            
+            if (!newTags) {
+                alertMessage('Please enter tags', 'bg-yellow-500');
+                return;
+            }
+
+            // Hide the modal
+            hideBulkTagDialog();
+
+            // Use the same parsing as single-tag input
+            const tagsArray = parseTagInput(newTags);
             
             if (tagsArray.length === 0) {
                 alertMessage('No valid tags entered', 'bg-yellow-500');
                 return;
             }
 
-            let successCount = 0;
-            let errorCount = 0;
+            // Show progress
+            alertMessage(`Preparing to tag ${selectedImages.size} images...`, 'bg-blue-500');
 
+            // Build bulk request payload
+            const bulkData = [];
             for (const imageId of selectedImages) {
-                try {
-                    const image = ALL_IMAGES.find(img => img.image_id === imageId);
-                    if (!image) continue;
-
+                const image = ALL_IMAGES.find(img => img.image_id === imageId);
+                if (image) {
                     // Merge existing tags with new tags
                     const existingTags = Array.isArray(image.tags) ? image.tags : [];
                     const mergedTags = [...new Set([...existingTags, ...tagsArray])].sort();
-
-                    const headers = { 'Content-Type': 'application/json' };
-                    if (authToken) {
-                        headers['Authorization'] = `Bearer ${authToken}`;
-                    }
                     
-                    const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(imageId)}/tags`, {
-                        method: 'POST',
-                        headers: headers,
-                        body: JSON.stringify({ tags: mergedTags })
+                    bulkData.push({
+                        image_id: imageId,
+                        tags: mergedTags
                     });
-
-                    if (response.ok) {
-                        updateLocalImage(imageId, { tags: mergedTags });
-                        successCount++;
-                    } else {
-                        errorCount++;
-                    }
-                } catch (error) {
-                    console.error(`Error tagging image ${imageId}:`, error);
-                    errorCount++;
                 }
             }
 
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (!authToken) {
+                    alertMessage('Session expired. Please log in again.', 'bg-red-500');
+                    return;
+                }
+                headers['Authorization'] = `Bearer ${authToken}`;
+                
+                console.log(`[BULK] Sending bulk tag request for ${bulkData.length} images`);
+                
+                // Single request for all images!
+                const response = await fetch(`/api/images/bulk/tags`, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({ images: bulkData })
+                });
+
+                console.log('[BULK] Response status:', response.status);
+
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('[BULK] Response data:', result);
+                    
+                    // Update local state for all successful images
+                    bulkData.forEach(imgData => {
+                        updateLocalImage(imgData.image_id, { tags: imgData.tags });
+                    });
+                    
+                    const successCount = result.updated || bulkData.length;
+                    const errorCount = result.failed || 0;
+                    
+                    if (errorCount === 0) {
+                        alertMessage(`✓ Successfully tagged ${successCount} image(s)`, 'bg-green-600');
+                    } else {
+                        alertMessage(`Tagged ${successCount} images, ${errorCount} failed`, 'bg-yellow-500');
+                        if (result.errors) {
+                            console.error('[BULK] Errors:', result.errors);
+                        }
+                    }
+                } else if (response.status === 401) {
+                    alertMessage('Session expired. Please log in again.', 'bg-red-500');
+                    logout();
+                    return;
+                } else {
+                    const result = await response.json().catch(() => ({ message: 'Unknown error' }));
+                    alertMessage(`Error: ${result.message}`, 'bg-red-500');
+                    console.error('[BULK] Error response:', result);
+                }
+            } catch (error) {
+                console.error('[BULK] Network error:', error);
+                alertMessage('Could not connect to server', 'bg-red-500');
+            }
+
+            // Final result
             if (errorCount === 0) {
-                alertMessage(`Successfully added tags to ${successCount} image(s)`, 'bg-green-600');
+                alertMessage(`✓ Successfully tagged ${successCount} image(s)`, 'bg-green-600');
             } else {
-                alertMessage(`Tagged ${successCount} images, ${errorCount} failed`, 'bg-yellow-500');
+                alertMessage(`Tagged ${successCount} images, ${errorCount} failed (check console for details)`, 'bg-yellow-500');
+                if (failedImages.length > 0) {
+                    console.error('[BULK] Failed images details:');
+                    failedImages.forEach(fail => {
+                        console.error(`  - ${fail.id || fail}`);
+                        if (fail.status) console.error(`    Status: ${fail.status}, Error: ${fail.error}`);
+                    });
+                }
             }
 
             clearSelection();
             renderPopularTags();
         };
 
+        // --- PAGINATION FUNCTIONS ---
+        
+        function updatePaginationUI() {
+            const paginationDiv = document.getElementById('pagination-controls');
+            const pageNumbersDiv = document.getElementById('page-numbers');
+            const prevButton = document.getElementById('prev-page');
+            const nextButton = document.getElementById('next-page');
+            
+            if (isRandomView || totalPages <= 1) {
+                paginationDiv.classList.add('hidden');
+                return;
+            }
+            
+            paginationDiv.classList.remove('hidden');
+            
+            // Update prev/next buttons
+            prevButton.disabled = currentPage === 1;
+            nextButton.disabled = currentPage === totalPages;
+            
+            // Generate page numbers (show 5 pages at a time)
+            const pageNumbers = [];
+            const maxButtons = 5;
+            let startPage = Math.max(1, currentPage - Math.floor(maxButtons / 2));
+            let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+            
+            // Adjust if at end
+            if (endPage - startPage < maxButtons - 1) {
+                startPage = Math.max(1, endPage - maxButtons + 1);
+            }
+            
+            // First page
+            if (startPage > 1) {
+                pageNumbers.push(`
+                    <button onclick="goToPage(1)" class="px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition text-sm">
+                        1
+                    </button>
+                `);
+                if (startPage > 2) {
+                    pageNumbers.push('<span class="px-2 text-gray-400">...</span>');
+                }
+            }
+            
+            // Page range
+            for (let i = startPage; i <= endPage; i++) {
+                const isActive = i === currentPage;
+                pageNumbers.push(`
+                    <button onclick="goToPage(${i})" 
+                            class="px-3 py-2 ${isActive ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-300 hover:bg-gray-50'} rounded-lg transition text-sm font-medium">
+                        ${i}
+                    </button>
+                `);
+            }
+            
+            // Last page
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    pageNumbers.push('<span class="px-2 text-gray-400">...</span>');
+                }
+                pageNumbers.push(`
+                    <button onclick="goToPage(${totalPages})" class="px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition text-sm">
+                        ${totalPages}
+                    </button>
+                `);
+            }
+            
+            pageNumbersDiv.innerHTML = pageNumbers.join('');
+        }
+        
+        window.goToPage = function(page) {
+            if (page < 1 || page > totalPages) return;
+            
+            currentPage = page;
+            
+            // Re-render with new page
+            filterImages(true, page);
+            
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        
+        // --- PAGE NAVIGATION ---
+        
+        window.resetPage = function(event) {
+            if (event) event.preventDefault();
+            
+            // Clear all URL parameters
+            window.history.replaceState({}, '', window.location.pathname);
+            
+            // Clear search inputs
+            searchInput.value = '';
+            typeFilter.value = '';
+            
+            // Reset to random view
+            showRandomBatch();
+            renderPopularTags();
+            
+            // Exit select mode if active
+            if (selectMode) {
+                toggleSelectMode();
+            }
+        };
+        
         // --- URL SHARING FUNCTIONS ---
         
         window.shareImage = function() {

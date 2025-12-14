@@ -159,7 +159,7 @@ def process_image(source_path, output_path, size):
                     temp_file
                 ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, stderr=subprocess.PIPE)
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode != 0 and result.stderr:
                 # Filter out harmless TIFF warnings
@@ -176,7 +176,7 @@ def process_image(source_path, output_path, size):
             subprocess.run([
                 'exiftool', '-TagsFromFile', source_path,
                 '-all:all', '-overwrite_original', temp_file
-            ], capture_output=True, stderr=subprocess.DEVNULL)
+            ], capture_output=True)
             
             os.rename(temp_file, output_path)
         else:
@@ -199,7 +199,7 @@ def process_image(source_path, output_path, size):
                     output_path
                 ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, stderr=subprocess.PIPE)
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
             if not os.path.exists(output_path):
                 if result.stderr:
@@ -354,13 +354,60 @@ def parse_path(full_path, base_dir):
 # MAIN PROCESSING
 # ============================================================================
 
-def process_all():
+def get_marked_images():
+    """Get list of images marked for reload from database."""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT image_id, thumbnail_path, highres_path 
+                FROM images 
+                WHERE needs_reload = TRUE;
+            """)
+            marked = cur.fetchall()
+        conn.close()
+        return marked
+    except Exception as e:
+        print(f"Error fetching marked images: {e}")
+        return []
+
+def clear_reload_flags(image_ids):
+    """Clear reload flags after processing."""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        with conn:
+            with conn.cursor() as cur:
+                for image_id in image_ids:
+                    cur.execute("UPDATE images SET needs_reload = FALSE WHERE image_id = %s;", (image_id,))
+        conn.close()
+        print(f"[RELOAD] Cleared reload flags for {len(image_ids)} images")
+    except Exception as e:
+        print(f"Error clearing reload flags: {e}")
+
+def process_all(reload_marked_only=False):
     """Main function that does everything."""
     
     print("=" * 70)
     print("ImageArchive Unified Update Script")
     print("=" * 70)
     print()
+    
+    # Check if we're only reloading marked images
+    if reload_marked_only:
+        print("MODE: Reload marked images only")
+        print()
+        marked_images = get_marked_images()
+        
+        if not marked_images:
+            print("✓ No images marked for reload")
+            return True
+        
+        print(f"Found {len(marked_images)} images marked for reload:\n")
+        for i, (image_id, thumb, highres) in enumerate(marked_images[:10], 1):
+            print(f"  {i}. {image_id}")
+        if len(marked_images) > 10:
+            print(f"  ... and {len(marked_images) - 10} more")
+        print()
     
     # Load index
     print("[1/4] Loading processing index...")
@@ -410,18 +457,50 @@ def process_all():
                 
                 batch_stats = {'new': 0, 'updated': 0, 'skipped': 0}
                 
-                # Find all images in batch
-                for image_file in os.scandir(source_batch_dir):
-                    if not image_file.is_file():
-                        continue
+                # Find all images - search current dir and one level deeper
+                batch_files = {}
+                
+                def scan_for_images(scan_dir, depth=0):
+                    """Scan directory for image files (up to 1 level deep)."""
+                    if depth > 1:
+                        return
                     
-                    ext = image_file.name.lower()
-                    if not (ext.endswith('.jpg') or ext.endswith('.jpeg') or 
-                            ext.endswith('.tif') or ext.endswith('.tiff')):
-                        continue
-                    
+                    for item in os.scandir(scan_dir):
+                        if item.is_file():
+                            filename = item.name
+                            
+                            # Skip hidden/temp/part files
+                            if (filename.startswith('._') or 
+                                filename.startswith('.') or 
+                                filename.startswith('part_')):
+                                continue
+                            
+                            ext = filename.lower()
+                            if not (ext.endswith('.jpg') or ext.endswith('.jpeg') or 
+                                    ext.endswith('.tif') or ext.endswith('.tiff')):
+                                continue
+                            
+                            basename = os.path.splitext(filename)[0]
+                            
+                            # Group files by basename (prefer .jpg over .tif)
+                            if basename not in batch_files:
+                                batch_files[basename] = item
+                            else:
+                                # Prefer JPEG over TIFF
+                                existing_ext = os.path.splitext(batch_files[basename].name)[1].lower()
+                                current_ext = os.path.splitext(filename)[1].lower()
+                                if current_ext in ['.jpg', '.jpeg'] and existing_ext in ['.tif', '.tiff']:
+                                    batch_files[basename] = item
+                        elif item.is_dir() and not item.name.startswith('.') and depth < 1:
+                            # Recurse one level deeper (max depth = 1)
+                            scan_for_images(item.path, depth + 1)
+                
+                # Scan source batch directory and one level deeper
+                scan_for_images(source_batch_dir, depth=0)
+                
+                # Process deduplicated files
+                for basename, image_file in batch_files.items():
                     filename = image_file.name
-                    basename = os.path.splitext(filename)[0]
                     basename_clean = sanitize_filename(basename)
                     
                     # Create output structure
@@ -449,19 +528,44 @@ def process_all():
                         print(f"      ✓ {filename}")
                         batch_stats['new'] += 1
                     
+                    # Try processing, with fallback to JPEG if TIFF fails
+                    current_source = image_file.path
+                    
                     # Process 600px
                     if small_needs:
-                        if process_image(image_file.path, small_output, SIZE_SMALL):
-                            save_index_entry(index, image_file.path, small_output, 
-                                           get_file_signature(image_file.path))
+                        success = process_image(current_source, small_output, SIZE_SMALL)
+                        
+                        # If TIFF failed, try JPEG version if it exists
+                        if not success and current_source.lower().endswith(('.tif', '.tiff')):
+                            jpg_version = os.path.splitext(current_source)[0] + '.jpg'
+                            if os.path.exists(jpg_version):
+                                print(f"      → Fallback to JPEG version")
+                                success = process_image(jpg_version, small_output, SIZE_SMALL)
+                                if success:
+                                    current_source = jpg_version
+                        
+                        if success:
+                            save_index_entry(index, current_source, small_output, 
+                                           get_file_signature(current_source))
                         else:
                             stats['errors'] += 1
                     
                     # Process 2560px
                     if large_needs:
-                        if process_image(image_file.path, large_output, SIZE_LARGE):
-                            save_index_entry(index, image_file.path, large_output,
-                                           get_file_signature(image_file.path))
+                        success = process_image(current_source, large_output, SIZE_LARGE)
+                        
+                        # If TIFF failed, try JPEG version if it exists
+                        if not success and current_source.lower().endswith(('.tif', '.tiff')):
+                            jpg_version = os.path.splitext(current_source)[0] + '.jpg'
+                            if os.path.exists(jpg_version):
+                                print(f"      → Fallback to JPEG version")
+                                success = process_image(jpg_version, large_output, SIZE_LARGE)
+                                if success:
+                                    current_source = jpg_version
+                        
+                        if success:
+                            save_index_entry(index, current_source, large_output,
+                                           get_file_signature(current_source))
                         else:
                             stats['errors'] += 1
                     
@@ -567,7 +671,7 @@ def process_all():
     print(f"Extracted EXIF from {exif_count} images")
     
     # Save to JSON
-    json_file = 'image_data.json'
+    json_file = '../image_data.json'
     with open(json_file, 'w') as f:
         json.dump(image_list, f, indent=4, default=str)
     print(f"Saved to {json_file}")
@@ -720,12 +824,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Unified ImageArchive update script')
     parser.add_argument('--skip-processing', action='store_true',
                         help='Skip image processing, only scan and update database')
+    parser.add_argument('--reload-marked', action='store_true',
+                        help='Only reload images marked with needs_reload flag')
     
     args = parser.parse_args()
     
     start_time = time.time()
     
-    if not process_all():
+    if not process_all(reload_marked_only=args.reload_marked):
         sys.exit(1)
     
     elapsed = time.time() - start_time

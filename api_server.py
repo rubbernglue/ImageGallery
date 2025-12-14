@@ -391,6 +391,7 @@ def list_images():
                     i.shutter_speed,
                     i.iso,
                     i.date_taken,
+                    i.exif_data,
                     COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}') AS tags
                 FROM 
                     images i
@@ -402,7 +403,7 @@ def list_images():
                     i.id, i.image_id, i.film_type, i.batch_info, i.filename_base, 
                     i.film_stock, i.thumbnail_path, i.highres_path, i.description,
                     i.camera_make, i.camera_model, i.lens_model, i.focal_length,
-                    i.aperture, i.shutter_speed, i.iso, i.date_taken
+                    i.aperture, i.shutter_speed, i.iso, i.date_taken, i.exif_data
                 ORDER BY i.id;
             """
             cur.execute(sql_query)
@@ -413,6 +414,126 @@ def list_images():
     except Exception as e:
         print(f"Error fetching images list: {e}")
         return jsonify({"success": False, "message": "Internal server error during data retrieval"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/images/bulk/tags', methods=['POST'])
+@require_auth
+def bulk_update_tags():
+    """
+    Update tags for multiple images in a single request.
+    Request body: { "images": [{"image_id": "...", "tags": [...]}, ...] }
+    """
+    print(f"[BULK] Bulk tag update request received")
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"success": False, "message": "Database unavailable"}), 503
+    
+    try:
+        data = request.get_json()
+        images = data.get('images', [])
+        
+        if not images or not isinstance(images, list):
+            return jsonify({"success": False, "message": "Invalid request format"}), 400
+        
+        success_count = 0
+        error_count = 0
+        errors = []
+        
+        for img_data in images:
+            try:
+                image_id = img_data.get('image_id')
+                new_tags = img_data.get('tags', [])
+                
+                if not image_id:
+                    error_count += 1
+                    continue
+                
+                # Use same logic as single update_tags
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT id FROM images WHERE image_id = %s;", (image_id,))
+                        image_db_row = cur.fetchone()
+                        
+                        if not image_db_row:
+                            error_count += 1
+                            errors.append(f"{image_id}: not found")
+                            continue
+                        
+                        image_pk_id = image_db_row[0]
+                        cleaned_tags = [tag.strip().lower() for tag in new_tags if tag.strip()]
+                        
+                        # Delete old tags
+                        cur.execute("DELETE FROM image_tags WHERE image_id = %s;", (image_pk_id,))
+                        
+                        # Insert new tags
+                        for tag_name in cleaned_tags:
+                            cur.execute("SELECT id FROM tags WHERE name = %s;", (tag_name,))
+                            tag_row = cur.fetchone()
+                            
+                            if tag_row:
+                                tag_id = tag_row[0]
+                            else:
+                                cur.execute("INSERT INTO tags (name) VALUES (%s) RETURNING id;", (tag_name,))
+                                tag_id = cur.fetchone()[0]
+                            
+                            cur.execute("INSERT INTO image_tags (image_id, tag_id) VALUES (%s, %s);", 
+                                      (image_pk_id, tag_id))
+                        
+                        success_count += 1
+                        
+            except Exception as e:
+                error_count += 1
+                errors.append(f"{img_data.get('image_id', 'unknown')}: {str(e)}")
+                print(f"[BULK] Error updating {img_data.get('image_id')}: {e}")
+        
+        print(f"[BULK] Completed: {success_count} success, {error_count} errors")
+        
+        return jsonify({
+            "success": True, 
+            "updated": success_count,
+            "failed": error_count,
+            "errors": errors if errors else None
+        }), 200
+        
+    except Exception as e:
+        print(f"[BULK] Error: {e}")
+        return jsonify({"success": False, "message": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/images/<path:image_id>/reload', methods=['PUT'])
+@require_auth
+def toggle_reload_flag(image_id):
+    """Toggle the needs_reload flag for an image."""
+    print(f"[RELOAD] Toggle reload flag for image_id: {image_id}")
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"success": False, "message": "Database unavailable"}), 503
+    
+    try:
+        data = request.get_json()
+        needs_reload = data.get('needs_reload', False)
+        
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM images WHERE image_id = %s;", (image_id,))
+                if not cur.fetchone():
+                    return jsonify({"success": False, "message": "Image not found"}), 404
+                
+                cur.execute("UPDATE images SET needs_reload = %s WHERE image_id = %s;", 
+                          (needs_reload, image_id))
+        
+        print(f"[RELOAD] Marked {image_id} for reload: {needs_reload}")
+        return jsonify({"success": True, "needs_reload": needs_reload}), 200
+        
+    except Exception as e:
+        print(f"[RELOAD] Error: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
     finally:
         if conn:
             conn.close()
