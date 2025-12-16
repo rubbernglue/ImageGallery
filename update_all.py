@@ -144,6 +144,8 @@ def process_image(source_path, output_path, size):
             if IMAGEMAGICK_CMD == 'magick':
                 cmd = [
                     'magick', f'{source_path}[0]',
+                    '-limit', 'memory', '2GiB',
+                    '-limit', 'map', '4GiB',
                     '-quiet', '-auto-orient',
                     '-resize', size,
                     '-quality', '85',
@@ -153,6 +155,8 @@ def process_image(source_path, output_path, size):
                 # ImageMagick v6 (convert command)
                 cmd = [
                     'convert', f'{source_path}[0]',
+                    '-limit', 'memory', '2GiB',
+                    '-limit', 'map', '4GiB',
                     '-auto-orient',
                     '-resize', size,
                     '-quality', '85',
@@ -184,6 +188,8 @@ def process_image(source_path, output_path, size):
             if IMAGEMAGICK_CMD == 'magick':
                 cmd = [
                     'magick', f'{source_path}[0]',
+                    '-limit', 'memory', '2GiB',
+                    '-limit', 'map', '4GiB',
                     '-quiet', '-auto-orient',
                     '-resize', size,
                     '-quality', '85',
@@ -193,6 +199,8 @@ def process_image(source_path, output_path, size):
                 # ImageMagick v6
                 cmd = [
                     'convert', f'{source_path}[0]',
+                    '-limit', 'memory', '2GiB',
+                    '-limit', 'map', '4GiB',
                     '-auto-orient',
                     '-resize', size,
                     '-quality', '85',
@@ -428,9 +436,119 @@ def process_all(reload_marked_only=False):
     # STEP 1: Process source images (bash script equivalent)
     # ========================================================================
     print()
-    print("[2/4] Processing source images...")
-    print("-" * 70)
     
+    if reload_marked_only:
+        print("[2/4] Reprocessing marked images only...")
+        print("-" * 70)
+        
+        # Get marked images from database
+        marked_images = get_marked_images()
+        images_to_reload = set(img_id for img_id, _, _ in marked_images)
+        
+        # Build a mapping of image_id to source paths
+        # We need to find the source files for these specific images
+        for img_id, thumb_path, highres_path in marked_images:
+            # Parse the image_id to find source
+            parts = img_id.split('/')
+            if len(parts) >= 3:
+                film_type = parts[0]
+                batch_name = parts[1]  # This is sanitized name with 'n' instead of '#'
+                filename_base = parts[2]
+                
+                # Try to find the source batch directory
+                source_dir = SOURCE_ROLLFILM if film_type == 'rollfilm' else SOURCE_SHEETFILM
+                
+                # The source batch might have # or n, need to check both
+                possible_batch_names = [batch_name, batch_name.replace('n', '#', 1)]
+                
+                source_batch_dir = None
+                for entry in os.scandir(source_dir):
+                    if entry.is_symlink() and entry.name in possible_batch_names:
+                        source_batch_dir = os.path.realpath(entry.path)
+                        break
+                
+                if source_batch_dir:
+                    # Find the source file - prefer JPG over TIFF
+                    source_file = None
+                    candidates = {}
+                    
+                    # First pass - find all matching files
+                    for item in os.scandir(source_batch_dir):
+                        if item.is_file():
+                            if item.name.startswith('._') or item.name.startswith('part_'):
+                                continue
+                            
+                            base = os.path.splitext(item.name)[0]
+                            ext = os.path.splitext(item.name)[1].lower()
+                            
+                            # Handle both sanitized and original names
+                            if sanitize_filename(base) == filename_base or base == filename_base:
+                                candidates[ext] = item.path
+                    
+                    # Prefer JPG over TIFF (JPG likely corrected)
+                    if '.jpg' in candidates or '.jpeg' in candidates:
+                        source_file = candidates.get('.jpg') or candidates.get('.jpeg')
+                        print(f"      → Using JPEG source")
+                    elif '.tif' in candidates or '.tiff' in candidates:
+                        source_file = candidates.get('.tif') or candidates.get('.tiff')
+                        print(f"      → Using TIFF source")
+                    
+                    # Also check subdirectories (one level deep)
+                    if not source_file:
+                        for subdir in os.scandir(source_batch_dir):
+                            if subdir.is_dir() and not subdir.name.startswith('.'):
+                                for item in os.scandir(subdir.path):
+                                    if item.is_file():
+                                        if item.name.startswith('._') or item.name.startswith('part_'):
+                                            continue
+                                        base = os.path.splitext(item.name)[0]
+                                        ext = os.path.splitext(item.name)[1].lower()
+                                        if sanitize_filename(base) == filename_base or base == filename_base:
+                                            candidates[ext] = item.path
+                        
+                        # Apply same preference
+                        if '.jpg' in candidates or '.jpeg' in candidates:
+                            source_file = candidates.get('.jpg') or candidates.get('.jpeg')
+                            print(f"      → Using JPEG source (from subdir)")
+                        elif '.tif' in candidates or '.tiff' in candidates:
+                            source_file = candidates.get('.tif') or candidates.get('.tiff')
+                            print(f"      → Using TIFF source (from subdir)")
+                    
+                    if source_file:
+                        print(f"   🔄 {img_id}")
+                        
+                        # Get target paths from database paths (convert back from /opt/media to /mnt/omv...)
+                        target_thumb = thumb_path.replace(PATH_DATABASE, PATH_SCANNER)
+                        target_highres = highres_path.replace(PATH_DATABASE, PATH_SCANNER)
+                        
+                        # Process the images
+                        if process_image(source_file, target_thumb, SIZE_SMALL):
+                            stats['updated'] += 1
+                        if process_image(source_file, target_highres, SIZE_LARGE):
+                            pass  # Count already incremented
+                    else:
+                        print(f"   ⚠ Source file not found for: {img_id}")
+                        stats['errors'] += 1
+                else:
+                    print(f"   ⚠ Source batch not found for: {img_id}")
+                    stats['errors'] += 1
+        
+        # Clear reload flags for processed images
+        if stats['updated'] > 0:
+            clear_reload_flags(images_to_reload)
+        
+        print()
+        print("-" * 70)
+        print(f"Reload complete: {stats['updated']} images reprocessed, {stats['errors']} errors")
+        
+        # Skip to scanning phase - don't process everything else
+        print()
+        print("[3/4] Skipping full scan (reload mode)")
+        print("[4/4] Skipping database update (reload mode)")
+        print()
+        return True
+    
+    # Normal mode - process everything
     for film_type, source_dir in [('rollfilm', SOURCE_ROLLFILM), ('sheetfilm', SOURCE_SHEETFILM)]:
         print(f"\n📁 Processing {film_type}...")
         

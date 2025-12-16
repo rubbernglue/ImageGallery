@@ -218,14 +218,20 @@
                 </div>
                 <!-- Type Filter -->
                 <div>
-                    <label for="type-filter" class="sr-only">Filter by Film Type</label>
-                    <select id="type-filter"
-                            class="w-full md:w-48 p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 bg-white transition duration-150">
+                    <label for="type-filter" class="sr-only">Filter by Type</label>
+                    <select id="type-filter" class="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
                         <option value="">All Types</option>
-                        <option value="sheetfilm">Sheet Film</option>
                         <option value="rollfilm">Roll Film</option>
-                        <option value="other">Other</option>
+                        <option value="sheetfilm">Sheet Film</option>
                     </select>
+                </div>
+                
+                <!-- Sort Options -->
+                <div>
+                    <label class="flex items-center space-x-2 p-3 bg-white border border-gray-300 rounded-lg shadow-sm cursor-pointer hover:bg-gray-50 transition">
+                        <input type="checkbox" id="sort-by-tags" onchange="filterImages()" class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                        <span class="text-sm text-gray-700">Fewest tags first</span>
+                    </label>
                 </div>
             </div>
 
@@ -741,7 +747,17 @@
                 return matchesTags && matchesDates && matchesGeneral && matchesType;
             });
 
-            // 2. Calculate pagination
+            // 2. Sort if "Fewest tags first" is enabled
+            const sortByTags = document.getElementById('sort-by-tags');
+            if (sortByTags && sortByTags.checked) {
+                filteredImages.sort((a, b) => {
+                    const aTagCount = Array.isArray(a.tags) ? a.tags.length : 0;
+                    const bTagCount = Array.isArray(b.tags) ? b.tags.length : 0;
+                    return aTagCount - bTagCount; // Ascending (fewest first)
+                });
+            }
+
+            // 3. Calculate pagination
             totalPages = Math.ceil(filteredImages.length / itemsPerPage);
             
             // 3. Reset the gallery
@@ -1073,7 +1089,7 @@
                 if (response.ok) {
                     activeImage.needs_reload = needsReload;
                     const msg = needsReload 
-                        ? 'Marked for reload - will be reprocessed on next update'
+                        ? 'Marked for reload'
                         : 'Reload flag cleared';
                     alertMessage(msg, 'bg-orange-500');
                 } else if (response.status === 401) {
