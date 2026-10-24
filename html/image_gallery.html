@@ -1,0 +1,2078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Shared Film Archive</title>
+
+    <!-- Open Graph Meta Tags for Link Previews -->
+    <meta property="og:title" content="Shared Film Archive" id="og-title">
+    <meta property="og:description" content="Browse film photography archive" id="og-description">
+    <meta property="og:image" content="" id="og-image">
+    <meta property="og:url" content="" id="og-url">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="theme-color" content="#0c0c0e">
+
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ink: { 950: '#0c0c0e', 900: '#141417', 850: '#1a1a1e', 800: '#222227', 700: '#2e2e35' },
+                        accent: { DEFAULT: '#f5b544', hover: '#ffc861', soft: 'rgba(245,181,68,0.14)' }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif']
+                    }
+                }
+            }
+        };
+    </script>
+
+    <!-- Leaflet.js for GPS maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        html { color-scheme: dark; }
+        body { background: #0c0c0e; -webkit-font-smoothing: antialiased; }
+
+        .scroll-hidden::-webkit-scrollbar { display: none; }
+        .scroll-hidden { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* Auth-dependent visibility (driven by a class on <body>) */
+        body:not(.logged-in) .auth-only { display: none !important; }
+        body.logged-in .guest-only { display: none !important; }
+
+        /* Gallery cards */
+        .image-card { content-visibility: auto; contain-intrinsic-size: 300px 240px; }
+        .image-card img { transition: transform .5s cubic-bezier(.2,.7,.2,1), opacity .3s; }
+        .image-card:hover img { transform: scale(1.04); }
+        .image-card .img-failed { opacity: 0; }
+        .image-card .selection-checkbox { display: none; }
+        body.select-mode .image-card .selection-checkbox { display: flex; }
+        body.select-mode .image-card:hover img { transform: none; }
+        .image-card.selected { box-shadow: 0 0 0 3px #f5b544; }
+        .image-card.selected .selection-checkbox { background: #f5b544; border-color: #f5b544; color: #0c0c0e; }
+        .image-card .selection-checkbox svg { opacity: 0; }
+
+        /* Favorites */
+        .heart { transition: fill .15s, color .15s, transform .15s; }
+        .is-favorite .heart { fill: currentColor; color: #fb7185; }
+        .image-card .card-favorite { opacity: 0; }
+        .image-card:hover .card-favorite, .image-card:focus-within .card-favorite, .image-card.is-favorite .card-favorite { opacity: 1; }
+        .card-favorite:active .heart, #lb-favorite:active .heart { transform: scale(.85); }
+        .image-card.selected .selection-checkbox svg { opacity: 1; }
+
+        /* Toasts */
+        .toast { animation: toast-in .25s ease-out; }
+        .toast.leaving { opacity: 0; transform: translateY(8px); transition: all .3s; }
+        @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+        /* Lightbox */
+        #lightbox-stage { touch-action: none; user-select: none; -webkit-user-select: none; }
+        #lightbox-image {
+            position: absolute; left: 0; top: 0;
+            transform-origin: 0 0;
+            will-change: transform;
+            max-width: none; /* sizing is computed in JS */
+            -webkit-user-drag: none;
+            cursor: zoom-in;
+            opacity: 0;
+            transition: opacity .2s;
+        }
+        #lightbox-image.loaded { opacity: 1; }
+        #lightbox-image.animating { transition: transform .22s cubic-bezier(.2,.7,.2,1), opacity .2s; }
+        #lightbox.zoomed #lightbox-image { cursor: grab; }
+        #lightbox.zoomed.dragging #lightbox-image { cursor: grabbing; }
+        #lightbox .chrome { transition: opacity .25s; }
+        #lightbox.chrome-hidden .chrome { opacity: 0; pointer-events: none; }
+
+        /* Info panel: side column on desktop, bottom sheet on mobile */
+        #metadata-panel { transition: transform .25s cubic-bezier(.2,.7,.2,1); }
+        @media (max-width: 1023px) {
+            #metadata-panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 70vh; border-radius: 1rem 1rem 0 0; z-index: 30; }
+            #lightbox:not(.panel-open) #metadata-panel { transform: translateY(105%); }
+        }
+        @media (min-width: 1024px) {
+            #lightbox:not(.panel-open) #metadata-panel { display: none; }
+        }
+
+        /* Keep Leaflet's panes inside the panel's stacking context */
+        #gps-map { isolation: isolate; }
+        .leaflet-container { background: #1a1a1e; }
+
+        .spinner { border: 3px solid rgba(255,255,255,.15); border-top-color: #f5b544; border-radius: 9999px; animation: spin .8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="font-sans text-zinc-200 min-h-screen">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-30 bg-ink-950/85 backdrop-blur-xl border-b border-white/5">
+        <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between gap-4 h-16">
+                <a href="?" id="home-link" class="flex items-center gap-3 group min-w-0">
+                    <span class="grid place-items-center w-9 h-9 rounded-lg bg-accent text-ink-950 shrink-0">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>
+                    </span>
+                    <span class="text-lg sm:text-xl font-semibold tracking-tight text-white group-hover:text-accent transition truncate">Shared Film Archive</span>
+                    <span id="total-count" class="hidden sm:inline-flex text-xs font-medium text-zinc-400 bg-white/5 rounded-full px-2.5 py-1"></span>
+                </a>
+                <div class="flex items-center gap-3 shrink-0">
+                    <button id="login-button" class="guest-only px-4 py-2 text-sm font-medium rounded-lg bg-white/5 hover:bg-white/10 text-white border border-white/10 transition">
+                        Log in
+                    </button>
+                    <div class="auth-only flex items-center gap-3">
+                        <span class="hidden sm:inline text-sm text-zinc-400">Signed in as <span id="username-display" class="text-white font-medium"></span></span>
+                        <button id="logout-button" class="px-3 py-2 text-sm rounded-lg text-zinc-300 hover:text-white hover:bg-white/5 transition">Log out</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Search & filter bar -->
+            <div class="flex flex-col md:flex-row md:items-center gap-3 pb-4">
+                <div class="relative flex-1">
+                    <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <label for="search-input" class="sr-only">Search images</label>
+                    <input type="search" id="search-input" autocomplete="off"
+                           placeholder='Search: nikon · tag:landscape · date:2024-12 · "multi word"'
+                           class="w-full h-11 pl-10 pr-10 rounded-xl bg-ink-850 border border-white/10 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 transition">
+                    <kbd class="hidden md:block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 border border-white/10 rounded px-1.5 py-0.5">/</kbd>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <div id="type-filter" role="radiogroup" aria-label="Film type" class="flex h-11 p-1 rounded-xl bg-ink-850 border border-white/10 text-sm">
+                        <button data-type="" class="type-option px-3 rounded-lg transition">All</button>
+                        <button data-type="rollfilm" class="type-option px-3 rounded-lg transition">Roll film</button>
+                        <button data-type="sheetfilm" class="type-option px-3 rounded-lg transition">Sheet film</button>
+                    </div>
+                    <button id="favorites-filter" aria-pressed="false" title="Show only your favorites"
+                            class="auth-only flex items-center gap-2 h-11 px-3 rounded-xl bg-ink-850 border border-white/10 text-sm text-zinc-300 hover:text-white hover:border-white/20 transition">
+                        <svg class="heart w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.4-9.2C1.3 8 3.4 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.6 0 5.7 3.5 4.4 6.8-1.9 4.6-9.4 9.2-9.4 9.2z"/></svg>
+                        Favorites <span id="favorites-count" class="text-xs text-zinc-500 tabular-nums"></span>
+                    </button>
+                    <label for="sort-select" class="sr-only">Sort order</label>
+                    <select id="sort-select" title="Sort order"
+                            class="h-11 pl-3 pr-8 rounded-xl bg-ink-850 border border-white/10 text-sm text-zinc-300 hover:border-white/20 focus:outline-none focus:border-accent/60 transition cursor-pointer">
+                        <option value="">Default order</option>
+                        <option value="number">Number order</option>
+                        <option value="tags">Fewest tags first</option>
+                    </select>
+                    <button id="shuffle-button" title="Show random images" class="flex items-center gap-2 h-11 px-3 rounded-xl bg-ink-850 border border-white/10 text-sm text-zinc-300 hover:text-white hover:border-white/20 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                        Shuffle
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5 pb-24">
+
+        <!-- Popular Tags -->
+        <section class="mb-6">
+            <div id="popular-tags-container" class="flex gap-2 overflow-x-auto scroll-hidden pb-1 -mx-1 px-1">
+                <span class="text-sm text-zinc-500">Loading tags…</span>
+            </div>
+        </section>
+
+        <div class="flex items-center justify-between mb-4 gap-4">
+            <p id="result-count" class="text-sm text-zinc-400">Loading archive…</p>
+        </div>
+
+        <!-- Image Gallery Grid -->
+        <div id="image-gallery" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6 gap-3 sm:gap-4"></div>
+
+        <div id="loading-indicator" class="flex flex-col items-center justify-center py-24 gap-4">
+            <div class="spinner w-10 h-10"></div>
+            <span class="text-sm text-zinc-500">Loading archive data…</span>
+        </div>
+
+        <!-- No Results Message -->
+        <div id="no-results" class="hidden text-center py-24 rounded-2xl border border-dashed border-white/10">
+            <p class="text-lg font-medium text-zinc-300">No images found</p>
+            <p class="text-sm text-zinc-500 mt-1">Try adjusting your search or filters.</p>
+        </div>
+
+        <!-- Pagination Controls (for search results) -->
+        <nav id="pagination-controls" class="hidden flex justify-center items-center gap-1.5 mt-10 flex-wrap" aria-label="Pagination">
+            <button id="prev-page" class="h-10 px-3 rounded-lg bg-ink-850 border border-white/10 text-sm hover:bg-ink-800 disabled:opacity-40 disabled:cursor-not-allowed transition">← Prev</button>
+            <div id="page-numbers" class="flex gap-1.5"></div>
+            <button id="next-page" class="h-10 px-3 rounded-lg bg-ink-850 border border-white/10 text-sm hover:bg-ink-800 disabled:opacity-40 disabled:cursor-not-allowed transition">Next →</button>
+        </nav>
+
+        <!-- Shuffle again (random view) -->
+        <div class="text-center mt-10">
+            <button id="load-more-button" class="hidden px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-ink-950 font-semibold shadow-lg shadow-amber-500/10 transition">
+                Show more random images
+            </button>
+        </div>
+    </main>
+
+    <!-- Multi-select toolbar -->
+    <div id="multi-select-toolbar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 pl-5 pr-2 py-2 rounded-2xl bg-ink-800/95 backdrop-blur border border-white/10 shadow-2xl">
+        <div>
+            <span id="selected-count" class="block text-sm font-medium text-white">0 selected</span>
+            <span class="block text-[11px] text-zinc-500">Shift+click selects a range</span>
+        </div>
+        <button id="bulk-tag-button" class="h-10 px-4 rounded-xl bg-accent hover:bg-accent-hover text-ink-950 text-sm font-semibold transition">Add tags</button>
+        <button id="clear-selection-button" class="h-10 px-3 rounded-xl text-sm text-zinc-300 hover:bg-white/5 transition">Clear</button>
+    </div>
+
+    <!-- Floating select-mode toggle (logged in only) -->
+    <button id="select-mode-toggle" title="Select multiple images"
+            class="auth-only fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-accent hover:bg-accent-hover text-ink-950 shadow-xl shadow-black/40 flex items-center justify-center transition">
+        <svg id="select-mode-icon" class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="m14 17.5 2 2 4-4"/></svg>
+    </button>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="hidden fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <form id="login-form" class="w-full max-w-sm rounded-2xl bg-ink-850 border border-white/10 p-7 shadow-2xl">
+            <h2 class="text-xl font-semibold text-white mb-1">Log in</h2>
+            <p class="text-sm text-zinc-400 mb-6">Sign in to edit tags and descriptions.</p>
+            <label for="username" class="block text-xs font-medium text-zinc-400 mb-1.5">Username</label>
+            <input type="text" id="username" required autocomplete="username"
+                   class="w-full h-11 px-3 mb-4 rounded-lg bg-ink-900 border border-white/10 text-white focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20">
+            <label for="password" class="block text-xs font-medium text-zinc-400 mb-1.5">Password</label>
+            <input type="password" id="password" required autocomplete="current-password"
+                   class="w-full h-11 px-3 mb-6 rounded-lg bg-ink-900 border border-white/10 text-white focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20">
+            <div class="flex gap-3">
+                <button type="button" id="login-cancel" class="flex-1 h-11 rounded-lg text-sm text-zinc-300 hover:bg-white/5 transition">Cancel</button>
+                <button type="submit" class="flex-1 h-11 rounded-lg bg-accent hover:bg-accent-hover text-ink-950 text-sm font-semibold transition">Log in</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Bulk Tag Modal -->
+    <div id="bulk-tag-modal" class="hidden fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="w-full max-w-md rounded-2xl bg-ink-850 border border-white/10 p-7 shadow-2xl">
+            <h2 class="text-xl font-semibold text-white mb-1">Add tags</h2>
+            <p class="text-sm text-zinc-400 mb-6"><span id="bulk-tag-count">0</span> images selected</p>
+            <div class="relative mb-6">
+                <label for="bulk-tag-input" class="block text-xs font-medium text-zinc-400 mb-1.5">Tags</label>
+                <input type="text" id="bulk-tag-input" placeholder='tag1 "tag 2" tag3' autocomplete="off"
+                       class="w-full h-11 px-3 rounded-lg bg-ink-900 border border-white/10 text-white focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20">
+                <div id="bulk-tag-suggestions" class="tag-suggestions hidden absolute z-10 w-full mt-1 rounded-lg bg-ink-800 border border-white/10 shadow-xl max-h-48 overflow-y-auto"></div>
+                <p class="text-xs text-zinc-500 mt-1.5">Separate with spaces. Use quotes for multi-word tags.</p>
+            </div>
+            <div class="flex gap-3">
+                <button type="button" id="bulk-tag-cancel" class="flex-1 h-11 rounded-lg text-sm text-zinc-300 hover:bg-white/5 transition">Cancel</button>
+                <button type="button" id="bulk-tag-confirm" class="flex-1 h-11 rounded-lg bg-accent hover:bg-accent-hover text-ink-950 text-sm font-semibold transition">Add tags</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lightbox -->
+    <div id="lightbox" class="hidden fixed inset-0 z-50 bg-black flex" role="dialog" aria-modal="true" aria-label="Image viewer">
+
+        <!-- Stage: the image lives here and is positioned/zoomed in JS -->
+        <div id="lightbox-stage" class="relative flex-1 min-w-0 overflow-hidden">
+            <img id="lightbox-image" alt="" draggable="false">
+
+            <div id="lightbox-spinner" class="hidden absolute inset-0 grid place-items-center pointer-events-none">
+                <div class="spinner w-10 h-10"></div>
+            </div>
+            <div id="lightbox-error" class="hidden absolute inset-0 grid place-items-center pointer-events-none text-zinc-500 text-sm">
+                Could not load this image.
+            </div>
+
+            <!-- Top bar -->
+            <div class="chrome absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-4 px-3 sm:px-5 pt-3 pb-10 bg-gradient-to-b from-black/70 to-transparent pointer-events-none" style="padding-top: max(0.75rem, env(safe-area-inset-top));">
+                <div class="min-w-0 pt-1.5 pl-1">
+                    <h2 id="lightbox-title" class="text-white font-medium truncate"></h2>
+                    <p id="lightbox-subtitle" class="text-xs text-zinc-400 truncate"></p>
+                </div>
+                <div class="flex items-center gap-1 pointer-events-auto shrink-0">
+                    <span id="lightbox-counter" class="hidden sm:inline text-xs text-zinc-400 tabular-nums mr-2"></span>
+                    <button id="lb-favorite" class="auth-only lb-btn" title="Favorite (F)" aria-pressed="false">
+                        <svg class="heart w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.4-9.2C1.3 8 3.4 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.6 0 5.7 3.5 4.4 6.8-1.9 4.6-9.4 9.2-9.4 9.2z"/></svg>
+                    </button>
+                    <button id="lb-zoom" class="lb-btn" title="Zoom (Z)">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></svg>
+                    </button>
+                    <a id="download-link" href="#" download class="lb-btn" title="Download high resolution">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
+                    </a>
+                    <button id="lb-share" class="lb-btn" title="Copy share link">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1M14 10a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1"/></svg>
+                    </button>
+                    <button id="lb-info" class="lb-btn" title="Details (I)">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+                    </button>
+                    <button id="lb-close" class="lb-btn" title="Close (Esc)">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Prev / next -->
+            <button id="prev-image-button" class="chrome lb-nav left-2 sm:left-4" title="Previous (←)">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <button id="next-image-button" class="chrome lb-nav right-2 sm:right-4" title="Next (→)">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+
+            <!-- Zoom level / hint -->
+            <div id="zoom-indicator" class="chrome absolute bottom-5 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur text-xs text-zinc-200 pointer-events-none opacity-0 transition-opacity"></div>
+        </div>
+
+        <!-- Metadata / editing panel -->
+        <aside id="metadata-panel" class="lg:relative lg:w-[380px] shrink-0 bg-ink-900 border-l border-white/5 overflow-y-auto scroll-hidden">
+            <div class="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-ink-900/95 backdrop-blur border-b border-white/5">
+                <h2 id="modal-title" class="text-base font-semibold text-white truncate pr-4">Image</h2>
+                <button id="panel-close" class="p-1.5 -mr-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition" title="Hide details">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                </button>
+            </div>
+
+            <div class="px-6 py-5 space-y-7">
+                <dl class="grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">
+                    <dt class="text-zinc-500">Type</dt><dd id="modal-type" class="text-zinc-200"></dd>
+                    <dt class="text-zinc-500">Film</dt><dd id="modal-stock" class="text-zinc-200"></dd>
+                    <dt class="text-zinc-500">Batch</dt><dd id="modal-batch" class="text-zinc-200"></dd>
+                    <dt class="text-zinc-500">ID</dt><dd id="modal-id" class="text-zinc-400 text-xs break-all font-mono leading-5"></dd>
+                </dl>
+
+                <!-- EXIF -->
+                <section id="exif-section" class="hidden">
+                    <h3 class="panel-heading">Camera &amp; settings</h3>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="exif-cell col-span-2"><span>Camera</span><b id="exif-camera"></b></div>
+                        <div class="exif-cell col-span-2"><span>Lens</span><b id="exif-lens"></b></div>
+                        <div class="exif-cell"><span>Focal length</span><b id="exif-focal"></b></div>
+                        <div class="exif-cell"><span>Aperture</span><b id="exif-aperture"></b></div>
+                        <div class="exif-cell"><span>Shutter</span><b id="exif-shutter"></b></div>
+                        <div class="exif-cell"><span>ISO</span><b id="exif-iso"></b></div>
+                        <div class="exif-cell col-span-2"><span>Date taken</span><b id="exif-date"></b></div>
+                    </div>
+                </section>
+
+                <!-- GPS Map -->
+                <section id="gps-map-container" class="hidden">
+                    <h3 class="panel-heading">Location</h3>
+                    <div id="gps-map" class="w-full h-48 rounded-xl overflow-hidden border border-white/5"></div>
+                    <p class="text-xs text-zinc-500 mt-2 flex justify-between gap-2">
+                        <span id="gps-coords" class="font-mono"></span>
+                        <a id="gps-maps-link" href="#" target="_blank" rel="noopener" class="text-accent hover:text-accent-hover">Open in Google Maps ↗</a>
+                    </p>
+                </section>
+
+                <!-- Description -->
+                <section>
+                    <h3 class="panel-heading">Description</h3>
+                    <p id="description-display" class="guest-only text-sm text-zinc-300 whitespace-pre-line leading-relaxed"></p>
+                    <div class="auth-only">
+                        <textarea id="description-input" rows="3" placeholder="Add a description…"
+                                  class="w-full p-3 rounded-lg bg-ink-850 border border-white/10 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 resize-y"></textarea>
+                        <button id="save-description-button" class="mt-2 w-full h-10 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium text-white transition">
+                            Save description
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Tags -->
+                <section>
+                    <h3 class="panel-heading">Tags</h3>
+                    <div id="modal-tags" class="flex flex-wrap gap-1.5 mb-3"></div>
+                    <div class="auth-only relative">
+                        <input type="text" id="new-tag" placeholder='Add tags: tag1 "tag 2" (Enter)' autocomplete="off"
+                               class="w-full h-10 px-3 rounded-lg bg-ink-850 border border-white/10 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20">
+                        <div id="tag-suggestions" class="tag-suggestions hidden absolute z-10 w-full mt-1 rounded-lg bg-ink-800 border border-white/10 shadow-xl max-h-48 overflow-y-auto"></div>
+                    </div>
+                </section>
+
+                <!-- Reload flag -->
+                <label class="auth-only flex items-center gap-2 text-sm text-zinc-400 cursor-pointer select-none">
+                    <input type="checkbox" id="reload-checkbox" class="w-4 h-4 rounded accent-amber-400">
+                    Mark for reload (re-scan from source)
+                </label>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] flex flex-col items-center gap-2 pointer-events-none"></div>
+
+    <style type="text/tailwindcss">
+        .lb-btn { @apply grid place-items-center w-10 h-10 rounded-full text-zinc-200 hover:text-white hover:bg-white/10 transition; }
+        .lb-nav { @apply absolute top-1/2 -translate-y-1/2 z-10 grid place-items-center w-12 h-12 rounded-full bg-black/40 hover:bg-black/70 text-white backdrop-blur transition; }
+        .panel-heading { @apply text-[11px] font-semibold uppercase tracking-wider text-zinc-500 mb-2.5; }
+        .exif-cell { @apply rounded-lg bg-ink-850 border border-white/5 px-3 py-2; }
+        .exif-cell span { @apply block text-[11px] text-zinc-500; }
+        .exif-cell b { @apply block text-sm font-medium text-zinc-200 truncate; }
+        .type-option { @apply text-zinc-400 hover:text-white; }
+        .type-option.active { @apply bg-white/10 text-white; }
+        .tag-chip { @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-zinc-300; }
+        .suggestion { @apply px-3 py-2 text-sm text-zinc-200 cursor-pointer hover:bg-white/5; }
+        .suggestion.active { @apply bg-white/10; }
+    </style>
+
+    <script>
+        // --- CONFIGURATION ---
+        // Use relative URL to avoid mixed content issues with HTTPS
+        const API_BASE_URL = '/api/images';
+        const RANDOM_BATCH_COUNT = 12;
+        const ITEMS_PER_PAGE = 24;
+        const SEARCH_DEBOUNCE_MS = 200;
+        const SWIPE_THRESHOLD = 60;
+
+        // --- GLOBAL STATE ---
+        let ALL_IMAGES = [];        // Full dataset from the API
+        let filteredImages = [];    // Images in the current view (random batch or filtered result)
+        let activeImage = null;     // Image currently open in the lightbox
+        let currentImageIndex = -1; // Index of activeImage in lightboxImages
+        let lightboxImages = [];    // Navigation list for the lightbox (snapshot of filteredImages)
+        let lightboxPushedHistory = false;
+        let selectMode = false;
+        let selectedImages = new Set();
+        let lastSelectedIndex = -1;
+        let isLoggedIn = false;
+        let currentUsername = null;
+        let authToken = null;
+        let currentPage = 1;
+        let totalPages = 1;
+        let isRandomView = true;
+        let currentType = '';
+        let currentMap = null;
+        let favoriteIds = new Set();      // image_ids favorited by the logged-in user
+        let favoritesOnly = false;        // "Favorites" filter on the main screen
+        let favoritesChanged = false;     // favorites edited in the lightbox while the filter is on
+        let sortMode = '';                // '' (database order) | 'number' | 'tags'
+
+        // Natural sort: "img2" < "img10", and batch/frame numbers compare numerically
+        const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+        // --- ELEMENTS (Assigned in init) ---
+        const $ = (id) => document.getElementById(id);
+        let galleryElement, searchInput, resultCountElement, noResultsElement, loadingIndicatorElement,
+            loadMoreButton, popularTagsContainer, totalCountElement, sortSelect;
+        let lightbox, lightboxStage, lightboxImage, metadataPanel;
+
+        // --- UTILITY FUNCTIONS ---
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[ch]);
+        }
+
+        // Maps /opt/media/... to the /media/... route served by nginx
+        function filePathToWebUrl(filePath) {
+            const baseDirMatch = '/opt/media';
+            if (filePath && filePath.startsWith(baseDirMatch)) {
+                return '/media' + filePath.slice(baseDirMatch.length);
+            }
+            return null;
+        }
+
+        function imageTitle(image) {
+            return image.filename_base || image.image_id.split('/').pop();
+        }
+
+        function stockLabel(image) {
+            return image.film_stock && image.film_stock !== 'Unknown' ? image.film_stock : '';
+        }
+
+        function filmTypeLabel(type) {
+            return { rollfilm: 'Roll film', sheetfilm: 'Sheet film' }[type] || type || '';
+        }
+
+        // date_taken is a naive TIMESTAMP; Flask serialises it as "... GMT", so read it back
+        // with UTC getters to avoid shifting it by the browser's timezone.
+        function parseDbDate(value) {
+            if (!value) return null;
+            let str = String(value);
+            if (/^\d{4}-\d{2}-\d{2}T[\d:.]+$/.test(str)) str += 'Z';
+            const date = new Date(str);
+            if (isNaN(date)) return null;
+            const pad = (n) => String(n).padStart(2, '0');
+            return {
+                year: String(date.getUTCFullYear()),
+                month: pad(date.getUTCMonth() + 1),
+                day: pad(date.getUTCDate()),
+                hours: pad(date.getUTCHours()),
+                minutes: pad(date.getUTCMinutes())
+            };
+        }
+
+        function getRandomSubset(array, count) {
+            const copy = [...array];
+            for (let i = copy.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [copy[i], copy[j]] = [copy[j], copy[i]];
+            }
+            return copy.slice(0, count);
+        }
+
+        function debounce(fn, ms) {
+            let timer;
+            return (...args) => {
+                clearTimeout(timer);
+                timer = setTimeout(() => fn(...args), ms);
+            };
+        }
+
+        function isTypingTarget(el) {
+            return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+        }
+
+        // Toast notification. type: success | error | warning | info
+        function alertMessage(message, type = 'success') {
+            const styles = {
+                success: 'bg-emerald-500/15 border-emerald-400/30 text-emerald-200',
+                error: 'bg-red-500/15 border-red-400/30 text-red-200',
+                warning: 'bg-amber-500/15 border-amber-400/30 text-amber-100',
+                info: 'bg-sky-500/15 border-sky-400/30 text-sky-100'
+            };
+            const toast = document.createElement('div');
+            toast.className = `toast pointer-events-auto px-4 py-2.5 rounded-xl border backdrop-blur-xl shadow-2xl text-sm ${styles[type] || styles.info}`;
+            toast.textContent = message;
+            const container = $('toast-container');
+            while (container.children.length >= 3) container.firstChild.remove();
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('leaving');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        // --- DATA LOADING ---
+
+        // Precompute a lowercase search string per image so filtering is cheap
+        function indexImage(img) {
+            if (!Array.isArray(img.tags)) img.tags = [];
+            const date = parseDbDate(img.date_taken);
+            img._dateString = date
+                ? `${date.year} ${date.month} ${date.day} ${date.year}-${date.month}-${date.day} ${date.year}-${date.month}`
+                : '';
+            img._search = [
+                img.image_id, img.film_type, img.batch_info, img.filename_base, img.film_stock,
+                img.description, img.tags.join(' '), img.camera_make, img.camera_model, img.lens_model,
+                img.focal_length, img.aperture, img.iso, img.shutter_speed, img._dateString
+            ].filter(v => v !== null && v !== undefined).join(' ').toLowerCase();
+        }
+
+        async function loadData() {
+            try {
+                const response = await fetch(API_BASE_URL);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                if (!data.success || !Array.isArray(data.images)) throw new Error('Invalid API response format');
+                ALL_IMAGES = data.images;
+                ALL_IMAGES.forEach(indexImage);
+                console.log(`[API] Loaded ${ALL_IMAGES.length} images.`);
+            } catch (error) {
+                console.error('[API] ERROR loading images:', error);
+                alertMessage('Could not load image data from the API.', 'error');
+                ALL_IMAGES = [];
+            }
+        }
+
+        // --- GALLERY RENDERING ---
+
+        const CHECK_ICON = '<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></svg>';
+
+        function renderImageCard(image) {
+            const card = document.createElement('div');
+            card.className = 'image-card group relative rounded-xl overflow-hidden bg-ink-850 cursor-pointer ring-1 ring-white/5 hover:ring-white/15 transition';
+            card.dataset.imageId = image.image_id;
+            card.tabIndex = 0;
+            if (selectedImages.has(image.image_id)) card.classList.add('selected');
+            if (favoriteIds.has(image.image_id)) card.classList.add('is-favorite');
+
+            const title = imageTitle(image);
+            const webUrl = filePathToWebUrl(image.thumbnail_path);
+            const stock = stockLabel(image);
+            const tagCount = image.tags.length;
+
+            card.innerHTML = `
+                <div class="aspect-[3/2] relative bg-ink-800 overflow-hidden">
+                    ${webUrl ? `<img src="${escapeHtml(webUrl)}" alt="${escapeHtml(title)}" loading="lazy" decoding="async" class="w-full h-full object-cover">` : ''}
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 to-black/0 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <button class="card-favorite auth-only absolute top-2 left-2 grid place-items-center w-8 h-8 rounded-full bg-black/40 backdrop-blur text-white hover:bg-black/60 transition" title="Favorite"><svg class="heart w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.4-9.2C1.3 8 3.4 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.6 0 5.7 3.5 4.4 6.8-1.9 4.6-9.4 9.2-9.4 9.2z"/></svg></button>
+                    <div class="selection-checkbox absolute top-2 right-2 w-6 h-6 rounded-md border-2 border-white/80 bg-black/30 items-center justify-center text-white">${CHECK_ICON}</div>
+                    ${tagCount === 0 ? '' : `<span class="absolute bottom-2 left-2 text-[10px] font-medium text-white/90 bg-black/50 backdrop-blur rounded-full px-2 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">${tagCount} tag${tagCount === 1 ? '' : 's'}</span>`}
+                </div>
+                <div class="px-3 py-2.5">
+                    <h3 class="text-sm font-medium text-zinc-100 truncate">${escapeHtml(title)}</h3>
+                    <p class="text-xs text-zinc-500 truncate mt-0.5">
+                        ${stock ? `<span class="text-accent/90">${escapeHtml(stock)}</span> · ` : ''}${escapeHtml(filmTypeLabel(image.film_type))}
+                    </p>
+                    ${image.description ? `<p class="text-xs text-zinc-400 truncate mt-1">${escapeHtml(image.description)}</p>` : ''}
+                </div>
+            `;
+            const img = card.querySelector('img');
+            if (img) img.addEventListener('error', () => img.classList.add('img-failed'), { once: true });
+            return card;
+        }
+
+        function renderCards(images) {
+            const fragment = document.createDocumentFragment();
+            images.forEach(img => fragment.appendChild(renderImageCard(img)));
+            galleryElement.replaceChildren(fragment);
+        }
+
+        // Re-render a single card in place (after tag/description edits)
+        function refreshCard(imageId) {
+            const old = galleryElement.querySelector(`[data-image-id="${CSS.escape(imageId)}"]`);
+            const image = ALL_IMAGES.find(img => img.image_id === imageId);
+            if (old && image) old.replaceWith(renderImageCard(image));
+        }
+
+        function handleGalleryClick(event) {
+            const card = event.target.closest('.image-card');
+            if (!card) return;
+            const image = filteredImages.find(img => img.image_id === card.dataset.imageId);
+            if (!image) return;
+            if (event.target.closest('.card-favorite')) {
+                toggleFavorite(image);
+                return;
+            }
+            if (selectMode) {
+                toggleImageSelection(image.image_id, card, event.shiftKey);
+            } else {
+                openModal(image);
+            }
+        }
+
+        // --- FILTERING AND VIEW MANAGEMENT ---
+
+        function showRandomBatch() {
+            isRandomView = true;
+            searchInput.value = '';
+            sortMode = '';
+            sortSelect.value = '';
+            favoritesOnly = false;
+            updateFavoritesUI();
+            setTypeFilter('', false);
+            updateURL({ search: null, type: null, page: null, sort: null, fav: null });
+
+            filteredImages = getRandomSubset(ALL_IMAGES, RANDOM_BATCH_COUNT);
+            renderCards(filteredImages);
+
+            $('pagination-controls').classList.add('hidden');
+            noResultsElement.classList.toggle('hidden', ALL_IMAGES.length > 0);
+            loadMoreButton.classList.toggle('hidden', ALL_IMAGES.length === 0);
+            resultCountElement.textContent = ALL_IMAGES.length === 0
+                ? 'The library is empty.'
+                : `${filteredImages.length} random images from the archive`;
+            highlightActiveTag();
+        }
+
+        function parseSearchQuery(query) {
+            // Advanced syntax: tag:value date:value "quoted phrase" plain words
+            const filters = { tags: [], dates: [], general: [] };
+            const regex = /(tag|date):(?:"([^"]+)"|(\S+))|"([^"]+)"|(\S+)/gi;
+            let match;
+            while ((match = regex.exec(query)) !== null) {
+                const key = match[1] && match[1].toLowerCase();
+                if (key === 'tag') filters.tags.push((match[2] || match[3]).toLowerCase());
+                else if (key === 'date') filters.dates.push((match[2] || match[3]).toLowerCase());
+                else filters.general.push((match[4] || match[5]).toLowerCase());
+            }
+            return filters;
+        }
+
+        function filterImages({ page = 1, updateUrl = true } = {}) {
+            const query = searchInput.value.trim();
+            const filterType = currentType;
+
+            if (!query && !filterType && !sortMode && !favoritesOnly) {
+                showRandomBatch();
+                return;
+            }
+
+            isRandomView = false;
+            const searchFilters = parseSearchQuery(query);
+
+            filteredImages = ALL_IMAGES.filter(img => {
+                if (favoritesOnly && !favoriteIds.has(img.image_id)) return false;
+                if (filterType && img.film_type !== filterType) return false;
+                if (!searchFilters.tags.every(t => img.tags.some(tag => tag.toLowerCase().includes(t)))) return false;
+                if (!searchFilters.dates.every(d => img._dateString.includes(d))) return false;
+                return searchFilters.general.every(term => img._search.includes(term));
+            });
+
+            // Array.prototype.sort is stable, so ties keep database order
+            if (sortMode === 'tags') {
+                filteredImages.sort((a, b) => a.tags.length - b.tags.length);
+            } else if (sortMode === 'number') {
+                // image_id is "film_type/batch/filename", so this orders by roll/batch number, then frame number
+                filteredImages.sort((a, b) => naturalCollator.compare(a.image_id, b.image_id));
+            }
+
+            totalPages = Math.max(1, Math.ceil(filteredImages.length / ITEMS_PER_PAGE));
+            currentPage = Math.min(Math.max(1, page), totalPages);
+
+            const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+            const pageImages = filteredImages.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+            renderCards(pageImages);
+
+            const total = filteredImages.length;
+            resultCountElement.textContent = total === 0
+                ? (favoritesOnly && favoriteIds.size === 0 ? 'No favorites yet — use the ♥ on an image to add one' : 'No matching images')
+                : `Showing ${startIndex + 1}–${startIndex + pageImages.length} of ${total} result${total === 1 ? '' : 's'}`;
+
+            noResultsElement.classList.toggle('hidden', total > 0);
+            loadMoreButton.classList.add('hidden');
+            updatePaginationUI();
+            highlightActiveTag();
+
+            if (updateUrl) {
+                updateURL({
+                    search: query || null,
+                    type: filterType || null,
+                    page: currentPage > 1 ? currentPage : null,
+                    sort: sortMode || null,
+                    fav: favoritesOnly ? '1' : null
+                });
+            }
+        }
+
+        function setTypeFilter(type, apply = true) {
+            currentType = type;
+            document.querySelectorAll('.type-option').forEach(btn => {
+                const active = btn.dataset.type === type;
+                btn.classList.toggle('active', active);
+                btn.setAttribute('aria-checked', active);
+            });
+            if (apply) filterImages();
+        }
+
+        function renderPopularTags() {
+            const tagCounts = {};
+            ALL_IMAGES.forEach(img => img.tags.forEach(tag => {
+                const t = tag.toLowerCase();
+                tagCounts[t] = (tagCounts[t] || 0) + 1;
+            }));
+            const sortedTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 24);
+
+            if (sortedTags.length === 0) {
+                popularTagsContainer.innerHTML = '<span class="text-sm text-zinc-500">No tags yet.</span>';
+                return;
+            }
+            popularTagsContainer.innerHTML = sortedTags.map(([tag, count]) => `
+                <button data-tag="${escapeHtml(tag)}" class="popular-tag shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-ink-850 border border-white/10 text-xs text-zinc-300 hover:text-white hover:border-white/25 transition">
+                    ${escapeHtml(tag)}<span class="text-zinc-500">${count}</span>
+                </button>
+            `).join('');
+            highlightActiveTag();
+        }
+
+        function highlightActiveTag() {
+            const activeTags = parseSearchQuery(searchInput.value).tags;
+            popularTagsContainer.querySelectorAll('.popular-tag').forEach(btn => {
+                const active = activeTags.includes(btn.dataset.tag);
+                btn.classList.toggle('!bg-accent', active);
+                btn.classList.toggle('!text-ink-950', active);
+                btn.classList.toggle('!border-accent', active);
+            });
+        }
+
+        // --- FAVORITES ---
+
+        function updateFavoritesUI() {
+            $('favorites-count').textContent = favoriteIds.size ? favoriteIds.size : '';
+            const filterButton = $('favorites-filter');
+            filterButton.setAttribute('aria-pressed', favoritesOnly);
+            filterButton.classList.toggle('is-favorite', favoritesOnly);
+            filterButton.classList.toggle('!border-rose-400/50', favoritesOnly);
+            filterButton.classList.toggle('!text-white', favoritesOnly);
+
+            const isFavorite = !!activeImage && favoriteIds.has(activeImage.image_id);
+            $('lb-favorite').classList.toggle('is-favorite', isFavorite);
+            $('lb-favorite').setAttribute('aria-pressed', isFavorite);
+            $('lb-favorite').title = isFavorite ? 'Remove from favorites (F)' : 'Add to favorites (F)';
+        }
+
+        function setFavoritesOnly(enabled) {
+            favoritesOnly = enabled;
+            updateFavoritesUI();
+            filterImages();
+        }
+
+        // Re-applies favorite markers to the cards on screen (or re-filters the favorites view)
+        function refreshFavoriteCards() {
+            if (favoritesOnly && !isRandomView) {
+                filterImages({ page: currentPage, updateUrl: false });
+                return;
+            }
+            galleryElement.querySelectorAll('.image-card').forEach(card =>
+                card.classList.toggle('is-favorite', favoriteIds.has(card.dataset.imageId)));
+        }
+
+        async function loadFavorites() {
+            favoriteIds = new Set();
+            if (isLoggedIn) {
+                try {
+                    const response = await fetch('/api/favorites', { headers: authHeaders() });
+                    if (response.ok) {
+                        const data = await response.json();
+                        favoriteIds = new Set(data.favorites || []);
+                    } else if (response.status === 401) {
+                        await handleApiError(response, '');
+                    } else {
+                        console.warn('[FAVORITES] Could not load favorites:', response.status);
+                    }
+                } catch (error) {
+                    console.error('[FAVORITES] Error loading favorites:', error);
+                }
+            }
+            updateFavoritesUI();
+            refreshFavoriteCards();
+        }
+
+        async function toggleFavorite(image) {
+            if (!requireAuth('save favorites') || !image) return;
+            const imageId = image.image_id;
+            const favorite = !favoriteIds.has(imageId);
+
+            // Optimistic update; reverted below if the server says no
+            const apply = (state) => {
+                if (state) favoriteIds.add(imageId);
+                else favoriteIds.delete(imageId);
+                updateFavoritesUI();
+                if (lightbox.classList.contains('hidden')) {
+                    refreshFavoriteCards();
+                } else {
+                    // Keep the lightbox's navigation list stable; re-filter when it closes
+                    favoritesChanged = true;
+                    const card = galleryElement.querySelector(`[data-image-id="${CSS.escape(imageId)}"]`);
+                    if (card) card.classList.toggle('is-favorite', state);
+                }
+            };
+            apply(favorite);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(imageId)}/favorite`, {
+                    method: 'PUT',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ favorite })
+                });
+                if (!response.ok) {
+                    apply(!favorite);
+                    await handleApiError(response, 'Could not update favorites.');
+                }
+            } catch (error) {
+                apply(!favorite);
+                console.error('[FAVORITES] Error:', error);
+                alertMessage('Could not connect to the API server.', 'error');
+            }
+        }
+
+        // --- PAGINATION ---
+
+        function updatePaginationUI() {
+            const paginationDiv = $('pagination-controls');
+            if (isRandomView || totalPages <= 1) {
+                paginationDiv.classList.add('hidden');
+                return;
+            }
+            paginationDiv.classList.remove('hidden');
+            $('prev-page').disabled = currentPage === 1;
+            $('next-page').disabled = currentPage === totalPages;
+
+            const maxButtons = 5;
+            let startPage = Math.max(1, currentPage - Math.floor(maxButtons / 2));
+            const endPage = Math.min(totalPages, startPage + maxButtons - 1);
+            startPage = Math.max(1, Math.min(startPage, endPage - maxButtons + 1));
+
+            const button = (page, active = false) => `
+                <button data-page="${page}" class="h-10 min-w-[2.5rem] px-2 rounded-lg text-sm tabular-nums transition ${active
+                    ? 'bg-accent text-ink-950 font-semibold'
+                    : 'bg-ink-850 border border-white/10 hover:bg-ink-800'}">${page}</button>`;
+            const ellipsis = '<span class="px-1 self-center text-zinc-600">…</span>';
+
+            const parts = [];
+            if (startPage > 1) {
+                parts.push(button(1));
+                if (startPage > 2) parts.push(ellipsis);
+            }
+            for (let i = startPage; i <= endPage; i++) parts.push(button(i, i === currentPage));
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) parts.push(ellipsis);
+                parts.push(button(totalPages));
+            }
+            $('page-numbers').innerHTML = parts.join('');
+        }
+
+        function goToPage(page) {
+            if (page < 1 || page > totalPages || page === currentPage) return;
+            filterImages({ page });
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // --- GPS MAP ---
+
+        function toDegrees(value) {
+            // EXIF rationals may arrive as numbers or [numerator, denominator] pairs
+            if (Array.isArray(value)) return value[1] ? value[0] / value[1] : NaN;
+            return Number(value);
+        }
+
+        function extractGPSCoordinates(image) {
+            const gps = image.exif_data && image.exif_data.GPSInfo;
+            if (!gps) return null;
+            try {
+                // Named keys (GPSLatitude) or numeric EXIF tag ids (1=LatRef, 2=Lat, 3=LonRef, 4=Lon)
+                const latDms = gps.GPSLatitude || gps[2];
+                const lonDms = gps.GPSLongitude || gps[4];
+                const latRef = gps.GPSLatitudeRef || gps[1];
+                const lonRef = gps.GPSLongitudeRef || gps[3];
+                if (!Array.isArray(latDms) || !Array.isArray(lonDms) || latDms.length < 3 || lonDms.length < 3) return null;
+
+                let lat = toDegrees(latDms[0]) + toDegrees(latDms[1]) / 60 + toDegrees(latDms[2]) / 3600;
+                let lon = toDegrees(lonDms[0]) + toDegrees(lonDms[1]) / 60 + toDegrees(lonDms[2]) / 3600;
+                if (latRef === 'S') lat = -lat;
+                if (lonRef === 'W') lon = -lon;
+                if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) return null;
+                return { lat, lon };
+            } catch (e) {
+                console.error('[GPS] Error parsing GPS:', e);
+                return null;
+            }
+        }
+
+        function renderGPSMap(image) {
+            const mapContainer = $('gps-map-container');
+            if (currentMap) {
+                currentMap.remove();
+                currentMap = null;
+            }
+            const gps = typeof L !== 'undefined' ? extractGPSCoordinates(image) : null;
+            if (!gps) {
+                mapContainer.classList.add('hidden');
+                return;
+            }
+            mapContainer.classList.remove('hidden');
+            $('gps-coords').textContent = `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`;
+            $('gps-maps-link').href = `https://www.google.com/maps?q=${gps.lat},${gps.lon}`;
+
+            currentMap = L.map('gps-map', { scrollWheelZoom: false, attributionControl: true }).setView([gps.lat, gps.lon], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(currentMap);
+            L.marker([gps.lat, gps.lon]).addTo(currentMap);
+            // The panel may be hidden or animating; recompute the size once it is laid out
+            setTimeout(() => currentMap && currentMap.invalidateSize(), 300);
+        }
+
+        // --- OPEN GRAPH META TAGS ---
+
+        function updateOpenGraphTags(image) {
+            const title = image.filename_base || 'Film Archive Image';
+            const description = image.description || `${filmTypeLabel(image.film_type)} - Batch ${image.batch_info}`;
+            const thumbnailUrl = filePathToWebUrl(image.thumbnail_path);
+            $('og-title').setAttribute('content', title);
+            $('og-description').setAttribute('content', description);
+            $('og-image').setAttribute('content', thumbnailUrl ? window.location.origin + thumbnailUrl : '');
+            $('og-url').setAttribute('content', window.location.href);
+            document.title = `${title} - Shared Film Archive`;
+        }
+
+        // --- LIGHTBOX: ZOOM & PAN ---
+        // The image is laid out at its "fit" size (contained in the stage) and then positioned with
+        // translate(x, y) scale(s), transform-origin 0 0. s = 1 means fit-to-screen.
+
+        const zoom = { scale: 1, x: 0, y: 0, baseWidth: 0, baseHeight: 0, fitRatio: 1, ready: false };
+        const pointers = new Map();
+        let gesture = null;
+        let lastTap = { time: 0, x: 0, y: 0 };
+        let zoomIndicatorTimer = null;
+
+        function stageSize() {
+            return { width: lightboxStage.clientWidth, height: lightboxStage.clientHeight };
+        }
+
+        function maxZoomScale() {
+            // Allow up to 2x the native pixel size, and at least 4x fit
+            return Math.max(4, 2 / zoom.fitRatio);
+        }
+
+        // Compute the fit size from the natural image size. With preserveView (stage resized),
+        // keep the zoom level and the image point at the centre of the stage.
+        function layoutImage(preserveView = false) {
+            if (!lightboxImage.naturalWidth) return;
+            const { width, height } = stageSize();
+            const keep = preserveView && zoom.ready && zoom.scale > 1.001;
+            let focusX = 0.5, focusY = 0.5;
+            if (keep) {
+                focusX = (zoom.stageWidth / 2 - zoom.x) / (zoom.baseWidth * zoom.scale);
+                focusY = (zoom.stageHeight / 2 - zoom.y) / (zoom.baseHeight * zoom.scale);
+            }
+            const fitRatio = Math.min(width / lightboxImage.naturalWidth, height / lightboxImage.naturalHeight);
+            zoom.fitRatio = fitRatio;
+            zoom.baseWidth = lightboxImage.naturalWidth * fitRatio;
+            zoom.baseHeight = lightboxImage.naturalHeight * fitRatio;
+            lightboxImage.style.width = `${zoom.baseWidth}px`;
+            lightboxImage.style.height = `${zoom.baseHeight}px`;
+            zoom.stageWidth = width;
+            zoom.stageHeight = height;
+            zoom.ready = true;
+            if (keep) {
+                zoom.x = width / 2 - focusX * zoom.baseWidth * zoom.scale;
+                zoom.y = height / 2 - focusY * zoom.baseHeight * zoom.scale;
+                applyZoom(false);
+            } else {
+                resetZoom(false);
+            }
+        }
+
+        function clampPan() {
+            const { width, height } = stageSize();
+            const w = zoom.baseWidth * zoom.scale;
+            const h = zoom.baseHeight * zoom.scale;
+            zoom.x = w <= width ? (width - w) / 2 : Math.min(0, Math.max(width - w, zoom.x));
+            zoom.y = h <= height ? (height - h) / 2 : Math.min(0, Math.max(height - h, zoom.y));
+        }
+
+        function applyZoom(animate = false) {
+            clampPan();
+            lightboxImage.classList.toggle('animating', animate);
+            lightboxImage.style.transform = `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`;
+            lightbox.classList.toggle('zoomed', zoom.scale > 1.001);
+        }
+
+        // Zoom to newScale keeping the stage point (cx, cy) fixed under the cursor/fingers
+        function zoomAt(newScale, cx, cy, animate = false) {
+            if (!zoom.ready) return;
+            newScale = Math.min(maxZoomScale(), Math.max(1, newScale));
+            const imageX = (cx - zoom.x) / zoom.scale;
+            const imageY = (cy - zoom.y) / zoom.scale;
+            zoom.scale = newScale;
+            zoom.x = cx - imageX * newScale;
+            zoom.y = cy - imageY * newScale;
+            applyZoom(animate);
+            showZoomIndicator();
+        }
+
+        function resetZoom(animate = true) {
+            zoom.scale = 1;
+            zoom.x = 0;
+            zoom.y = 0;
+            applyZoom(animate);
+        }
+
+        // Click/double-tap: fit -> 100% (native pixels, at least 2x) at the given point; zoomed -> fit
+        function toggleZoomAt(cx, cy) {
+            if (zoom.scale > 1.001) {
+                resetZoom(true);
+                showZoomIndicator();
+            } else {
+                zoomAt(Math.max(2, 1 / zoom.fitRatio), cx, cy, true);
+            }
+        }
+
+        function toggleZoomCenter() {
+            const { width, height } = stageSize();
+            toggleZoomAt(width / 2, height / 2);
+        }
+
+        function showZoomIndicator() {
+            const indicator = $('zoom-indicator');
+            const percent = Math.round(zoom.scale * zoom.fitRatio * 100);
+            indicator.textContent = zoom.scale > 1.001
+                ? `${percent}% · drag to pan · click to fit`
+                : 'Click or scroll to zoom';
+            indicator.style.opacity = '1';
+            clearTimeout(zoomIndicatorTimer);
+            zoomIndicatorTimer = setTimeout(() => { indicator.style.opacity = '0'; }, 1400);
+        }
+
+        function stagePoint(event) {
+            const rect = lightboxStage.getBoundingClientRect();
+            return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        }
+
+        function handleStagePointerDown(event) {
+            // Let the chrome buttons handle their own clicks
+            if (event.target.closest('button, a')) return;
+            if (event.pointerType === 'mouse' && event.button !== 0) return;
+            try { lightboxStage.setPointerCapture(event.pointerId); } catch (e) { /* pointer already released */ }
+            pointers.set(event.pointerId, stagePoint(event));
+
+            if (pointers.size === 1) {
+                const p = stagePoint(event);
+                gesture = { type: 'drag', startX: p.x, startY: p.y, originX: zoom.x, originY: zoom.y, moved: false, onImage: event.target === lightboxImage };
+            } else if (pointers.size === 2) {
+                const [a, b] = [...pointers.values()];
+                gesture = {
+                    type: 'pinch',
+                    distance: Math.hypot(a.x - b.x, a.y - b.y),
+                    midX: (a.x + b.x) / 2,
+                    midY: (a.y + b.y) / 2
+                };
+            }
+        }
+
+        function handleStagePointerMove(event) {
+            if (!pointers.has(event.pointerId) || !gesture) return;
+            pointers.set(event.pointerId, stagePoint(event));
+
+            if (gesture.type === 'pinch' && pointers.size >= 2) {
+                if (!zoom.ready) return;
+                const [a, b] = [...pointers.values()];
+                const distance = Math.hypot(a.x - b.x, a.y - b.y);
+                const midX = (a.x + b.x) / 2;
+                const midY = (a.y + b.y) / 2;
+                // Pan with the fingers' midpoint, then zoom around it
+                zoom.x += midX - gesture.midX;
+                zoom.y += midY - gesture.midY;
+                zoomAt(zoom.scale * (distance / gesture.distance), midX, midY);
+                Object.assign(gesture, { distance, midX, midY });
+                return;
+            }
+
+            if (gesture.type === 'drag') {
+                const p = stagePoint(event);
+                const dx = p.x - gesture.startX;
+                const dy = p.y - gesture.startY;
+                if (!gesture.moved && Math.hypot(dx, dy) > 6) {
+                    gesture.moved = true;
+                    lightbox.classList.add('dragging');
+                }
+                if (gesture.moved && zoom.scale > 1.001) {
+                    zoom.x = gesture.originX + dx;
+                    zoom.y = gesture.originY + dy;
+                    applyZoom(false);
+                }
+            }
+        }
+
+        function handleStagePointerUp(event) {
+            if (!pointers.has(event.pointerId)) return;
+            const p = stagePoint(event);
+            pointers.delete(event.pointerId);
+            lightbox.classList.remove('dragging');
+
+            if (gesture && gesture.type === 'pinch') {
+                // Ending a pinch: don't treat the remaining finger as a new tap/swipe
+                if (pointers.size === 0) {
+                    gesture = null;
+                    if (zoom.scale < 1.05) resetZoom(true);
+                } else {
+                    gesture = { type: 'none' };
+                }
+                return;
+            }
+            if (!gesture || gesture.type !== 'drag' || event.type === 'pointercancel') {
+                gesture = null;
+                return;
+            }
+
+            const dx = p.x - gesture.startX;
+            const dy = p.y - gesture.startY;
+            const g = gesture;
+            gesture = null;
+
+            if (g.moved) {
+                // Horizontal swipe navigates when not zoomed
+                if (zoom.scale <= 1.001 && Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.5) {
+                    dx < 0 ? showNextImage() : showPreviousImage();
+                }
+                return;
+            }
+
+            // A tap/click without movement
+            if (event.pointerType === 'mouse') {
+                if (g.onImage || zoom.scale > 1.001) toggleZoomAt(p.x, p.y);
+                return;
+            }
+            const now = Date.now();
+            if (now - lastTap.time < 300 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 30) {
+                lastTap.time = 0;
+                toggleZoomAt(p.x, p.y);
+            } else {
+                lastTap = { time: now, x: p.x, y: p.y };
+                // Single tap toggles the controls (deferred so a double tap doesn't flicker them)
+                setTimeout(() => {
+                    if (lastTap.time === now) lightbox.classList.toggle('chrome-hidden');
+                }, 300);
+            }
+        }
+
+        function handleStageWheel(event) {
+            if (!zoom.ready) return;
+            event.preventDefault();
+            const p = stagePoint(event);
+            // Normalise line/page deltas (Firefox) to pixels
+            const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY;
+            zoomAt(zoom.scale * Math.exp(-delta * 0.0015), p.x, p.y);
+        }
+
+        // --- LIGHTBOX: NAVIGATION ---
+
+        function showImage(index) {
+            if (index < 0 || index >= lightboxImages.length) return;
+            currentImageIndex = index;
+            activeImage = lightboxImages[index];
+
+            const highResUrl = filePathToWebUrl(activeImage.highres_path);
+            zoom.ready = false;
+            lightbox.classList.remove('zoomed');
+            lightboxImage.classList.remove('loaded', 'animating');
+            lightboxImage.style.transform = '';
+            $('lightbox-error').classList.add('hidden');
+            $('lightbox-spinner').classList.remove('hidden');
+            lightboxImage.alt = imageTitle(activeImage);
+            if (highResUrl) {
+                lightboxImage.src = highResUrl;
+            } else {
+                lightboxImage.removeAttribute('src');
+                handleLightboxImageError();
+            }
+
+            $('lightbox-title').textContent = imageTitle(activeImage);
+            $('lightbox-subtitle').textContent = [stockLabel(activeImage), filmTypeLabel(activeImage.film_type)].filter(Boolean).join(' · ');
+            $('lightbox-counter').textContent = lightboxImages.length > 1 ? `${index + 1} / ${lightboxImages.length}` : '';
+            $('download-link').href = highResUrl || '#';
+
+            const multiple = lightboxImages.length > 1;
+            $('prev-image-button').classList.toggle('hidden', !multiple);
+            $('next-image-button').classList.toggle('hidden', !multiple);
+
+            updateMetadataPanel(activeImage);
+            updateFavoritesUI();
+            updateURL({ image: activeImage.image_id });
+            updateOpenGraphTags(activeImage);
+            preloadNeighbours();
+        }
+
+        function handleLightboxImageLoad() {
+            $('lightbox-spinner').classList.add('hidden');
+            lightboxImage.classList.add('loaded');
+            layoutImage();
+        }
+
+        function handleLightboxImageError() {
+            $('lightbox-spinner').classList.add('hidden');
+            $('lightbox-error').classList.remove('hidden');
+            lightboxImage.classList.remove('loaded');
+            zoom.ready = false;
+        }
+
+        function preloadNeighbours() {
+            if (lightboxImages.length < 2) return;
+            [1, -1].forEach(offset => {
+                const neighbour = lightboxImages[(currentImageIndex + offset + lightboxImages.length) % lightboxImages.length];
+                const url = filePathToWebUrl(neighbour.highres_path);
+                if (url) new Image().src = url;
+            });
+        }
+
+        function showNextImage() {
+            if (lightboxImages.length < 2) return;
+            showImage((currentImageIndex + 1) % lightboxImages.length);
+        }
+
+        function showPreviousImage() {
+            if (lightboxImages.length < 2) return;
+            showImage((currentImageIndex - 1 + lightboxImages.length) % lightboxImages.length);
+        }
+
+        function openModal(image, { pushHistory = true } = {}) {
+            const wasOpen = !lightbox.classList.contains('hidden');
+            lightboxImages = [...filteredImages];
+            let index = lightboxImages.findIndex(img => img.image_id === image.image_id);
+            if (index === -1) {
+                lightboxImages = [image];
+                index = 0;
+            }
+
+            lightbox.classList.remove('hidden', 'chrome-hidden');
+            document.body.style.overflow = 'hidden';
+
+            // Push a history entry so the browser/phone back button closes the lightbox
+            if (!wasOpen && pushHistory) {
+                const url = new URL(window.location.href);
+                url.searchParams.set('image', image.image_id);
+                history.pushState({ lightbox: true }, '', url);
+                lightboxPushedHistory = true;
+            }
+
+            showImage(index);
+            setTimeout(showZoomIndicator, 400);
+        }
+
+        // Closes the lightbox UI; fromHistory is set when triggered by the back button
+        function closeModal(fromHistory = false) {
+            if (lightbox.classList.contains('hidden')) return;
+            lightbox.classList.add('hidden');
+            lightbox.classList.remove('panel-open', 'zoomed', 'dragging');
+            document.body.style.overflow = '';
+            pointers.clear();
+            gesture = null;
+            lightboxImage.removeAttribute('src');
+            zoom.ready = false;
+            if (currentMap) {
+                currentMap.remove();
+                currentMap = null;
+            }
+
+            const closedImageId = activeImage && activeImage.image_id;
+            activeImage = null;
+            document.title = 'Shared Film Archive';
+
+            if (lightboxPushedHistory && !fromHistory) {
+                lightboxPushedHistory = false;
+                history.back();
+            } else {
+                lightboxPushedHistory = false;
+                updateURL({ image: null });
+            }
+
+            if (favoritesChanged) {
+                favoritesChanged = false;
+                refreshFavoriteCards();
+            }
+
+            // Return focus to the card that was open, if it's on the page
+            if (closedImageId) {
+                const card = galleryElement.querySelector(`[data-image-id="${CSS.escape(closedImageId)}"]`);
+                if (card) card.focus({ preventScroll: false });
+            }
+        }
+
+        function toggleMetadataPanel(force) {
+            const open = lightbox.classList.toggle('panel-open', force);
+            $('lb-info').classList.toggle('!bg-white/15', open);
+            // The stage width changes on desktop; the ResizeObserver re-fits the image
+            if (open && currentMap) setTimeout(() => currentMap.invalidateSize(), 300);
+        }
+
+        function handleKeyDown(e) {
+            if (lightbox.classList.contains('hidden')) {
+                if (e.key === '/' && !isTypingTarget(document.activeElement)) {
+                    e.preventDefault();
+                    searchInput.focus();
+                } else if (e.key === 'Enter' && document.activeElement.classList.contains('image-card')) {
+                    document.activeElement.click();
+                }
+                return;
+            }
+            if (isTypingTarget(document.activeElement)) {
+                if (e.key === 'Escape') document.activeElement.blur();
+                return;
+            }
+            switch (e.key) {
+                case 'ArrowLeft': showPreviousImage(); break;
+                case 'ArrowRight': showNextImage(); break;
+                case 'Escape':
+                    if (zoom.scale > 1.001) resetZoom(true);
+                    else if (lightbox.classList.contains('panel-open')) toggleMetadataPanel(false);
+                    else closeModal();
+                    break;
+                case 'i': case 'I': toggleMetadataPanel(); break;
+                case 'z': case 'Z': toggleZoomCenter(); break;
+                case 'f': case 'F':
+                    if (!isLoggedIn) return;
+                    toggleFavorite(activeImage);
+                    break;
+                case '+': case '=': { const { width, height } = stageSize(); zoomAt(zoom.scale * 1.5, width / 2, height / 2, true); break; }
+                case '-': { const { width, height } = stageSize(); zoomAt(zoom.scale / 1.5, width / 2, height / 2, true); break; }
+                case '0': resetZoom(true); break;
+                default: return;
+            }
+            e.preventDefault();
+        }
+
+        // --- METADATA PANEL ---
+
+        function updateMetadataPanel(image) {
+            if (!image) return;
+            $('modal-title').textContent = imageTitle(image);
+            $('modal-id').textContent = image.image_id;
+            $('modal-type').textContent = filmTypeLabel(image.film_type);
+            $('modal-stock').textContent = stockLabel(image) || '—';
+
+            // Show the leading sequence of batch_info, e.g. "100_2013_Bronica" -> "100", "4x5_0201-0204_2020" -> "4x5_0201-0204"
+            const batch = image.batch_info || '';
+            const batchMatch = batch.match(/^(\d+x\d+_[\d-]+|\d+[\d-]*)/);
+            $('modal-batch').textContent = batchMatch ? batchMatch[1] : (batch || '—');
+
+            const hasExif = image.camera_model || image.camera_make || image.lens_model ||
+                image.focal_length || image.aperture || image.shutter_speed || image.iso || image.date_taken;
+            $('exif-section').classList.toggle('hidden', !hasExif);
+            if (hasExif) {
+                $('exif-camera').textContent = [image.camera_make, image.camera_model].filter(Boolean).join(' ') || '—';
+                $('exif-lens').textContent = image.lens_model || '—';
+                $('exif-focal').textContent = image.focal_length || '—';
+                $('exif-aperture').textContent = image.aperture || '—';
+                $('exif-shutter').textContent = image.shutter_speed || '—';
+                $('exif-iso').textContent = image.iso || '—';
+                const d = parseDbDate(image.date_taken);
+                $('exif-date').textContent = d ? `${d.year}-${d.month}-${d.day} ${d.hours}:${d.minutes}` : '—';
+            }
+
+            renderGPSMap(image);
+
+            $('description-display').textContent = image.description || 'No description yet.';
+            $('description-display').classList.toggle('text-zinc-500', !image.description);
+            // Always fill the editor, so logging in while the lightbox is open can't save an empty description
+            $('description-input').value = image.description || '';
+            $('new-tag').value = '';
+            $('tag-suggestions').classList.add('hidden');
+            $('reload-checkbox').checked = !!image.needs_reload;
+
+            renderModalTags();
+        }
+
+        function renderModalTags() {
+            const container = $('modal-tags');
+            if (!activeImage) return;
+            const tags = [...activeImage.tags].sort();
+            if (tags.length === 0) {
+                container.innerHTML = '<span class="text-sm text-zinc-500">No tags yet.</span>';
+                return;
+            }
+            container.innerHTML = tags.map(tag => `
+                <span class="tag-chip">
+                    <button class="tag-search hover:text-white" data-tag="${escapeHtml(tag)}" title="Show all images tagged “${escapeHtml(tag)}”">${escapeHtml(tag)}</button>
+                    ${isLoggedIn ? `<button class="tag-delete -mr-1 p-0.5 rounded-full text-zinc-500 hover:text-red-300 hover:bg-red-500/10" data-tag="${escapeHtml(tag)}" title="Remove tag">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                    </button>` : ''}
+                </span>
+            `).join('');
+        }
+
+        function handleModalTagsClick(event) {
+            const del = event.target.closest('.tag-delete');
+            if (del) {
+                deleteTag(del.dataset.tag);
+                return;
+            }
+            const search = event.target.closest('.tag-search');
+            if (search) {
+                const tag = search.dataset.tag;
+                const applySearch = () => {
+                    searchInput.value = `tag:"${tag}"`;
+                    filterImages();
+                    window.scrollTo({ top: 0 });
+                };
+                // closeModal() may go back in history; filter only once that has landed,
+                // otherwise the search would be written to the lightbox's history entry
+                const waitForHistory = lightboxPushedHistory;
+                closeModal();
+                if (waitForHistory) window.addEventListener('popstate', applySearch, { once: true });
+                else applySearch();
+            }
+        }
+
+        // --- API INTERACTION ---
+
+        function authHeaders() {
+            return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` };
+        }
+
+        // Reports a failed API response; a 401 also logs the user out
+        async function handleApiError(response, fallbackMessage) {
+            if (response.status === 401) {
+                alertMessage('Session expired. Please log in again.', 'error');
+                logout(false);
+                return;
+            }
+            const result = await response.json().catch(() => ({}));
+            alertMessage(result.message || fallbackMessage, 'error');
+        }
+
+        function updateLocalImage(imageId, updates) {
+            const image = ALL_IMAGES.find(img => img.image_id === imageId);
+            if (image) {
+                Object.assign(image, updates);
+                indexImage(image);
+            }
+            refreshCard(imageId);
+        }
+
+        function parseTagInput(input) {
+            const tags = [];
+            const regex = /"([^"]+)"|(\S+)/g;
+            let match;
+            while ((match = regex.exec(input)) !== null) {
+                const tag = (match[1] || match[2]).trim().toLowerCase();
+                if (tag && !tags.includes(tag)) tags.push(tag);
+            }
+            return tags;
+        }
+
+        async function saveImageTags(image, tags) {
+            const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(image.image_id)}/tags`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ tags })
+            });
+            if (response.ok) {
+                updateLocalImage(image.image_id, { tags });
+                renderModalTags();
+                renderPopularTags();
+                return true;
+            }
+            await handleApiError(response, 'Could not update tags.');
+            return false;
+        }
+
+        async function saveTag() {
+            if (!requireAuth('add tags') || !activeImage) return;
+            const tagInput = $('new-tag');
+            const newTags = parseTagInput(tagInput.value);
+            if (newTags.length === 0) return;
+
+            const tagsToAdd = newTags.filter(tag => !activeImage.tags.includes(tag));
+            if (tagsToAdd.length === 0) {
+                alertMessage('Those tags are already on this image.', 'info');
+                tagInput.value = '';
+                return;
+            }
+            const image = activeImage;
+            try {
+                if (await saveImageTags(image, [...image.tags, ...tagsToAdd].sort())) {
+                    tagInput.value = '';
+                    alertMessage(tagsToAdd.length === 1 ? `Added “${tagsToAdd[0]}”` : `Added ${tagsToAdd.length} tags`);
+                }
+            } catch (error) {
+                console.error('[TAG] API error:', error);
+                alertMessage('Could not connect to the API server.', 'error');
+            }
+        }
+
+        async function deleteTag(tagToDelete) {
+            if (!requireAuth('delete tags') || !activeImage) return;
+            const image = activeImage;
+            try {
+                if (await saveImageTags(image, image.tags.filter(t => t !== tagToDelete))) {
+                    alertMessage(`Removed “${tagToDelete}”`);
+                }
+            } catch (error) {
+                console.error('[TAG] API error:', error);
+                alertMessage('Could not connect to the API server.', 'error');
+            }
+        }
+
+        async function saveDescription() {
+            if (!requireAuth('save descriptions') || !activeImage) return;
+            const image = activeImage;
+            const newDesc = $('description-input').value.trim();
+            try {
+                const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(image.image_id)}/description`, {
+                    method: 'PUT',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ description: newDesc })
+                });
+                if (response.ok) {
+                    updateLocalImage(image.image_id, { description: newDesc });
+                    $('description-display').textContent = newDesc || 'No description yet.';
+                    alertMessage('Description saved.');
+                } else {
+                    await handleApiError(response, 'Could not save the description.');
+                }
+            } catch (error) {
+                console.error('[DESC] API error:', error);
+                alertMessage('Could not connect to the API server.', 'error');
+            }
+        }
+
+        async function toggleReloadFlag() {
+            if (!requireAuth('mark images for reload') || !activeImage) return;
+            const image = activeImage;
+            const checkbox = $('reload-checkbox');
+            const needsReload = checkbox.checked;
+            try {
+                const response = await fetch(`${API_BASE_URL}/${encodeURIComponent(image.image_id)}/reload`, {
+                    method: 'PUT',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ needs_reload: needsReload })
+                });
+                if (response.ok) {
+                    image.needs_reload = needsReload;
+                    alertMessage(needsReload ? 'Marked for reload' : 'Reload flag cleared', 'info');
+                } else {
+                    checkbox.checked = !needsReload;
+                    await handleApiError(response, 'Failed to update reload flag.');
+                }
+            } catch (error) {
+                checkbox.checked = !needsReload;
+                console.error('[RELOAD] Error:', error);
+                alertMessage('Could not connect to the API server.', 'error');
+            }
+        }
+
+        // --- TAG AUTOCOMPLETE (shared by the lightbox and bulk dialogs) ---
+
+        function getAllExistingTags() {
+            const tagSet = new Set();
+            ALL_IMAGES.forEach(img => img.tags.forEach(tag => tagSet.add(tag.toLowerCase())));
+            return Array.from(tagSet).sort();
+        }
+
+        function currentWordStart(value) {
+            return Math.max(value.lastIndexOf(' '), value.lastIndexOf('"')) + 1;
+        }
+
+        function setupTagAutocomplete(input, suggestionsDiv, onEnter) {
+            let activeIndex = -1;
+
+            const hide = () => {
+                suggestionsDiv.classList.add('hidden');
+                activeIndex = -1;
+            };
+
+            const choose = (tag) => {
+                const value = input.value;
+                const start = currentWordStart(value);
+                // Quote multi-word tags so they parse back as one tag
+                const needsQuotes = tag.includes(' ') && value[start - 1] !== '"';
+                input.value = value.slice(0, start) + (needsQuotes ? `"${tag}"` : tag) + (value[start - 1] === '"' ? '" ' : ' ');
+                input.focus();
+                hide();
+            };
+
+            input.addEventListener('input', () => {
+                const value = input.value;
+                const word = value.slice(currentWordStart(value)).toLowerCase();
+                if (word.length < 2) return hide();
+                const matches = getAllExistingTags().filter(tag => tag.startsWith(word) && tag !== word).slice(0, 8);
+                if (matches.length === 0) return hide();
+                activeIndex = -1;
+                suggestionsDiv.innerHTML = matches.map(tag => `<div class="suggestion" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</div>`).join('');
+                suggestionsDiv.classList.remove('hidden');
+            });
+
+            input.addEventListener('keydown', (e) => {
+                const items = [...suggestionsDiv.querySelectorAll('.suggestion')];
+                const open = !suggestionsDiv.classList.contains('hidden') && items.length > 0;
+                if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    e.preventDefault();
+                    activeIndex = (activeIndex + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                    items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (open && activeIndex >= 0) choose(items[activeIndex].dataset.tag);
+                    else { hide(); onEnter(); }
+                } else if (e.key === 'Escape' && open) {
+                    e.stopPropagation();
+                    hide();
+                }
+            });
+
+            // mousedown fires before blur, so the click registers before the list hides
+            suggestionsDiv.addEventListener('mousedown', (e) => {
+                const item = e.target.closest('.suggestion');
+                if (item) {
+                    e.preventDefault();
+                    choose(item.dataset.tag);
+                }
+            });
+            input.addEventListener('blur', () => setTimeout(hide, 150));
+        }
+
+        // --- AUTHENTICATION ---
+
+        function checkStoredAuth() {
+            try {
+                const storedToken = localStorage.getItem('authToken');
+                const storedUsername = localStorage.getItem('username');
+                if (storedToken && storedUsername) {
+                    authToken = storedToken;
+                    currentUsername = storedUsername;
+                    isLoggedIn = true;
+                }
+            } catch (e) {
+                console.warn('[AUTH] localStorage unavailable:', e);
+            }
+            updateAuthUI();
+        }
+
+        function updateAuthUI() {
+            document.body.classList.toggle('logged-in', isLoggedIn);
+            $('username-display').textContent = currentUsername || '';
+            if (!isLoggedIn && selectMode) toggleSelectMode();
+            if (!isLoggedIn) {
+                favoriteIds = new Set();
+                updateFavoritesUI();
+                if (favoritesOnly) setFavoritesOnly(false);
+                else refreshFavoriteCards();
+            }
+            if (activeImage) renderModalTags();
+        }
+
+        function showLoginDialog() {
+            $('login-modal').classList.remove('hidden');
+            setTimeout(() => $('username').focus(), 50);
+        }
+
+        function hideLoginDialog() {
+            $('login-modal').classList.add('hidden');
+            $('login-form').reset();
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            const username = $('username').value.trim();
+            const password = $('password').value;
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.token) {
+                    authToken = data.token;
+                    currentUsername = data.username || username;
+                    isLoggedIn = true;
+                    try {
+                        localStorage.setItem('authToken', authToken);
+                        localStorage.setItem('username', currentUsername);
+                    } catch (e) { /* session-only login */ }
+                    updateAuthUI();
+                    hideLoginDialog();
+                    loadFavorites();
+                    alertMessage(`Welcome, ${currentUsername}`);
+                } else {
+                    alertMessage(data.message || 'Login failed', 'error');
+                }
+            } catch (error) {
+                console.error('[AUTH] Login error:', error);
+                alertMessage('Could not connect to server', 'error');
+            }
+        }
+
+        // notifyServer=false when the token is already invalid (401)
+        function logout(notifyServer = true) {
+            if (notifyServer && authToken) {
+                // Invalidate the token server-side too; failures are non-critical
+                fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() }).catch(() => {});
+            }
+            isLoggedIn = false;
+            currentUsername = null;
+            authToken = null;
+            try {
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('username');
+            } catch (e) { /* ignore */ }
+            clearSelection();
+            updateAuthUI();
+            if (notifyServer) alertMessage('Logged out', 'info');
+        }
+
+        function requireAuth(actionName) {
+            if (!isLoggedIn) {
+                alertMessage(`Please log in to ${actionName}`, 'warning');
+                return false;
+            }
+            return true;
+        }
+
+        // --- MULTI-SELECT ---
+
+        const SELECT_ICON = '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="m14 17.5 2 2 4-4"/>';
+        const CLOSE_ICON = '<path d="M6 6l12 12M18 6 6 18"/>';
+
+        function toggleSelectMode() {
+            selectMode = !selectMode;
+            document.body.classList.toggle('select-mode', selectMode);
+            const button = $('select-mode-toggle');
+            button.title = selectMode ? 'Exit select mode' : 'Select multiple images';
+            $('select-mode-icon').innerHTML = selectMode ? CLOSE_ICON : SELECT_ICON;
+            button.classList.toggle('!bg-zinc-700', selectMode);
+            button.classList.toggle('!text-white', selectMode);
+            if (!selectMode) clearSelection();
+        }
+
+        function setCardSelected(imageId, selected) {
+            const card = galleryElement.querySelector(`[data-image-id="${CSS.escape(imageId)}"]`);
+            if (card) card.classList.toggle('selected', selected);
+        }
+
+        function toggleImageSelection(imageId, cardElement, shiftKey = false) {
+            const currentIndex = filteredImages.findIndex(img => img.image_id === imageId);
+
+            if (shiftKey && lastSelectedIndex >= 0 && currentIndex >= 0) {
+                const start = Math.min(lastSelectedIndex, currentIndex);
+                const end = Math.max(lastSelectedIndex, currentIndex);
+                for (let i = start; i <= end; i++) {
+                    selectedImages.add(filteredImages[i].image_id);
+                    setCardSelected(filteredImages[i].image_id, true);
+                }
+            } else if (selectedImages.has(imageId)) {
+                selectedImages.delete(imageId);
+                cardElement.classList.remove('selected');
+            } else {
+                selectedImages.add(imageId);
+                cardElement.classList.add('selected');
+            }
+            lastSelectedIndex = currentIndex;
+            updateMultiSelectToolbar();
+        }
+
+        function updateMultiSelectToolbar() {
+            const count = selectedImages.size;
+            $('multi-select-toolbar').classList.toggle('hidden', count === 0);
+            $('selected-count').textContent = `${count} image${count === 1 ? '' : 's'} selected`;
+        }
+
+        function clearSelection() {
+            selectedImages.clear();
+            lastSelectedIndex = -1;
+            galleryElement.querySelectorAll('.image-card.selected').forEach(card => card.classList.remove('selected'));
+            updateMultiSelectToolbar();
+        }
+
+        function bulkTagImages() {
+            if (selectedImages.size === 0) return alertMessage('No images selected', 'warning');
+            if (!requireAuth('add tags')) return;
+            $('bulk-tag-count').textContent = selectedImages.size;
+            $('bulk-tag-input').value = '';
+            $('bulk-tag-modal').classList.remove('hidden');
+            setTimeout(() => $('bulk-tag-input').focus(), 50);
+        }
+
+        function hideBulkTagDialog() {
+            $('bulk-tag-modal').classList.add('hidden');
+            $('bulk-tag-input').value = '';
+            $('bulk-tag-suggestions').classList.add('hidden');
+        }
+
+        async function confirmBulkTag() {
+            const tagsArray = parseTagInput($('bulk-tag-input').value);
+            if (tagsArray.length === 0) return alertMessage('Please enter tags', 'warning');
+            if (!requireAuth('add tags')) return;
+            hideBulkTagDialog();
+
+            const bulkData = [];
+            for (const imageId of selectedImages) {
+                const image = ALL_IMAGES.find(img => img.image_id === imageId);
+                if (image) {
+                    bulkData.push({ image_id: imageId, tags: [...new Set([...image.tags, ...tagsArray])].sort() });
+                }
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/bulk/tags`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ images: bulkData })
+                });
+                if (!response.ok) {
+                    await handleApiError(response, 'Bulk tagging failed.');
+                    return;
+                }
+                const result = await response.json();
+                const failedIds = new Set((result.errors || []).map(err => String(err).split(':')[0]));
+                bulkData.forEach(item => {
+                    if (!failedIds.has(item.image_id)) updateLocalImage(item.image_id, { tags: item.tags });
+                });
+
+                const successCount = result.updated ?? bulkData.length;
+                const errorCount = result.failed || 0;
+                if (errorCount === 0) {
+                    alertMessage(`Tagged ${successCount} image${successCount === 1 ? '' : 's'}`);
+                } else {
+                    alertMessage(`Tagged ${successCount} images, ${errorCount} failed (see console)`, 'warning');
+                    console.error('[BULK] Errors:', result.errors);
+                }
+                clearSelection();
+                renderPopularTags();
+            } catch (error) {
+                console.error('[BULK] Network error:', error);
+                alertMessage('Could not connect to server', 'error');
+            }
+        }
+
+        // --- SHARING ---
+
+        async function shareImage() {
+            if (!activeImage) return;
+            const shareURL = `${window.location.origin}${window.location.pathname}?image=${encodeURIComponent(activeImage.image_id)}`;
+            try {
+                await navigator.clipboard.writeText(shareURL);
+            } catch (err) {
+                // Fallback for insecure contexts / older browsers
+                const tempInput = document.createElement('input');
+                tempInput.value = shareURL;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                tempInput.remove();
+            }
+            alertMessage('Share link copied to clipboard');
+        }
+
+        // --- URL STATE ---
+
+        function updateURL(params) {
+            try {
+                const url = new URL(window.location.href);
+                Object.entries(params).forEach(([key, value]) => {
+                    if (value) url.searchParams.set(key, value);
+                    else url.searchParams.delete(key);
+                });
+                history.replaceState(history.state, '', url);
+            } catch (error) {
+                console.error('[URL] Error updating URL:', error);
+            }
+        }
+
+        function resetPage(event) {
+            if (event) event.preventDefault();
+            if (selectMode) toggleSelectMode();
+            history.replaceState(null, '', window.location.pathname);
+            showRandomBatch();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // --- INITIALIZATION ---
+
+        function bindEvents() {
+            const debouncedFilter = debounce(() => filterImages(), SEARCH_DEBOUNCE_MS);
+            searchInput.addEventListener('input', debouncedFilter);
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    searchInput.value = '';
+                    filterImages();
+                    searchInput.blur();
+                }
+            });
+            document.querySelectorAll('.type-option').forEach(btn =>
+                btn.addEventListener('click', () => setTypeFilter(btn.dataset.type)));
+            sortSelect.addEventListener('change', () => {
+                sortMode = sortSelect.value;
+                filterImages();
+            });
+            $('favorites-filter').addEventListener('click', () => setFavoritesOnly(!favoritesOnly));
+            $('shuffle-button').addEventListener('click', showRandomBatch);
+            loadMoreButton.addEventListener('click', showRandomBatch);
+            $('home-link').addEventListener('click', resetPage);
+
+            popularTagsContainer.addEventListener('click', (e) => {
+                const btn = e.target.closest('.popular-tag');
+                if (!btn) return;
+                const tagQuery = `tag:"${btn.dataset.tag}"`;
+                // Clicking the active tag clears it
+                searchInput.value = searchInput.value.trim() === tagQuery ? '' : tagQuery;
+                filterImages();
+            });
+
+            galleryElement.addEventListener('click', handleGalleryClick);
+            $('prev-page').addEventListener('click', () => goToPage(currentPage - 1));
+            $('next-page').addEventListener('click', () => goToPage(currentPage + 1));
+            $('page-numbers').addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-page]');
+                if (btn) goToPage(Number(btn.dataset.page));
+            });
+
+            // Auth
+            $('login-button').addEventListener('click', showLoginDialog);
+            $('logout-button').addEventListener('click', () => logout());
+            $('login-form').addEventListener('submit', handleLogin);
+            $('login-cancel').addEventListener('click', hideLoginDialog);
+            $('login-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'login-modal') hideLoginDialog(); });
+
+            // Multi-select
+            $('select-mode-toggle').addEventListener('click', toggleSelectMode);
+            $('bulk-tag-button').addEventListener('click', bulkTagImages);
+            $('clear-selection-button').addEventListener('click', clearSelection);
+            $('bulk-tag-cancel').addEventListener('click', hideBulkTagDialog);
+            $('bulk-tag-confirm').addEventListener('click', confirmBulkTag);
+            $('bulk-tag-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'bulk-tag-modal') hideBulkTagDialog(); });
+            setupTagAutocomplete($('bulk-tag-input'), $('bulk-tag-suggestions'), confirmBulkTag);
+
+            // Lightbox
+            lightboxStage.addEventListener('pointerdown', handleStagePointerDown);
+            lightboxStage.addEventListener('pointermove', handleStagePointerMove);
+            lightboxStage.addEventListener('pointerup', handleStagePointerUp);
+            lightboxStage.addEventListener('pointercancel', handleStagePointerUp);
+            lightboxStage.addEventListener('wheel', handleStageWheel, { passive: false });
+            lightboxImage.addEventListener('load', handleLightboxImageLoad);
+            lightboxImage.addEventListener('error', () => { if (lightboxImage.getAttribute('src')) handleLightboxImageError(); });
+            new ResizeObserver(() => { if (zoom.ready) layoutImage(true); }).observe(lightboxStage);
+
+            $('lb-close').addEventListener('click', () => closeModal());
+            $('lb-info').addEventListener('click', () => toggleMetadataPanel());
+            $('lb-zoom').addEventListener('click', toggleZoomCenter);
+            $('lb-favorite').addEventListener('click', () => toggleFavorite(activeImage));
+            $('lb-share').addEventListener('click', shareImage);
+            $('panel-close').addEventListener('click', () => toggleMetadataPanel(false));
+            $('prev-image-button').addEventListener('click', showPreviousImage);
+            $('next-image-button').addEventListener('click', showNextImage);
+
+            $('modal-tags').addEventListener('click', handleModalTagsClick);
+            $('save-description-button').addEventListener('click', saveDescription);
+            $('reload-checkbox').addEventListener('change', toggleReloadFlag);
+            setupTagAutocomplete($('new-tag'), $('tag-suggestions'), saveTag);
+
+            document.addEventListener('keydown', handleKeyDown);
+
+            // Back button closes the lightbox; forward re-opens the image in the URL
+            window.addEventListener('popstate', () => {
+                const imageId = new URLSearchParams(window.location.search).get('image');
+                if (!imageId) {
+                    closeModal(true);
+                } else if (lightbox.classList.contains('hidden')) {
+                    const image = ALL_IMAGES.find(img => img.image_id === imageId);
+                    if (image) openModal(image, { pushHistory: false });
+                }
+            });
+        }
+
+        async function init() {
+            galleryElement = $('image-gallery');
+            searchInput = $('search-input');
+            resultCountElement = $('result-count');
+            noResultsElement = $('no-results');
+            loadingIndicatorElement = $('loading-indicator');
+            loadMoreButton = $('load-more-button');
+            popularTagsContainer = $('popular-tags-container');
+            totalCountElement = $('total-count');
+            sortSelect = $('sort-select');
+            lightbox = $('lightbox');
+            lightboxStage = $('lightbox-stage');
+            lightboxImage = $('lightbox-image');
+            metadataPanel = $('metadata-panel');
+
+            checkStoredAuth();
+            bindEvents();
+            setTypeFilter('', false);
+
+            await loadData();
+            loadingIndicatorElement.classList.add('hidden');
+            totalCountElement.textContent = `${ALL_IMAGES.length.toLocaleString()} images`;
+            renderPopularTags();
+            if (isLoggedIn) await loadFavorites();
+
+            // Restore view from URL parameters (shared links)
+            const params = new URLSearchParams(window.location.search);
+            const imageId = params.get('image');
+            sortMode = ['number', 'tags'].includes(params.get('sort')) ? params.get('sort') : '';
+            sortSelect.value = sortMode;
+            favoritesOnly = isLoggedIn && params.get('fav') === '1';
+            updateFavoritesUI();
+            if (params.get('search') || params.get('type') || sortMode || favoritesOnly) {
+                searchInput.value = params.get('search') || '';
+                setTypeFilter(['rollfilm', 'sheetfilm'].includes(params.get('type')) ? params.get('type') : '', false);
+                filterImages({ page: parseInt(params.get('page'), 10) || 1 });
+            } else {
+                showRandomBatch();
+            }
+
+            if (imageId) {
+                const sharedImage = ALL_IMAGES.find(img => img.image_id === imageId);
+                if (sharedImage) {
+                    // Opened from a link: replace the URL instead of pushing so "back" leaves normally
+                    history.replaceState(null, '', (() => { const u = new URL(window.location.href); u.searchParams.delete('image'); return u; })());
+                    openModal(sharedImage);
+                } else {
+                    alertMessage('Shared image not found', 'warning');
+                    updateURL({ image: null });
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

@@ -7,7 +7,7 @@ import time
 import logging
 import psycopg2
 import psycopg2.extras # REQUIRED for RealDictCursor
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from functools import wraps
 from datetime import datetime
@@ -158,6 +158,7 @@ def require_auth(f):
             return jsonify({"success": False, "message": "Token expired, please log in again"}), 401
         
         print(f"[AUTH] Token valid for user '{token_data['username']}' (expires in {expires_in/3600:.1f} hours)")
+        g.username = token_data['username']
         return f(*args, **kwargs)
     
     return decorated_function
@@ -392,6 +393,7 @@ def list_images():
                     i.iso,
                     i.date_taken,
                     i.exif_data,
+                    i.needs_reload,
                     COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}') AS tags
                 FROM 
                     images i
@@ -403,7 +405,8 @@ def list_images():
                     i.id, i.image_id, i.film_type, i.batch_info, i.filename_base, 
                     i.film_stock, i.thumbnail_path, i.highres_path, i.description,
                     i.camera_make, i.camera_model, i.lens_model, i.focal_length,
-                    i.aperture, i.shutter_speed, i.iso, i.date_taken, i.exif_data
+                    i.aperture, i.shutter_speed, i.iso, i.date_taken, i.exif_data,
+                    i.needs_reload
                 ORDER BY i.id;
             """
             cur.execute(sql_query)
@@ -537,6 +540,72 @@ def toggle_reload_flag(image_id):
     finally:
         if conn:
             conn.close()
+
+@app.route('/api/favorites', methods=['GET'])
+@require_auth
+def list_favorites():
+    """Return the image_id strings favorited by the logged-in user."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"success": False, "message": "Database unavailable"}), 503
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT i.image_id
+                FROM favorites f
+                JOIN images i ON i.id = f.image_id
+                WHERE f.username = %s
+                ORDER BY f.created_at;
+            """, (g.username,))
+            favorites = [row[0] for row in cur.fetchall()]
+        return jsonify({"success": True, "favorites": favorites}), 200
+
+    except Exception as e:
+        print(f"[FAVORITES] Error listing favorites: {e}")
+        return jsonify({"success": False, "message": "Internal server error"}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/images/<path:image_id>/favorite', methods=['PUT'])
+@require_auth
+def set_favorite(image_id):
+    """Add (favorite: true) or remove (favorite: false) an image from the user's favorites."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"success": False, "message": "Database unavailable"}), 503
+
+    try:
+        data = request.get_json() or {}
+        favorite = bool(data.get('favorite', True))
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM images WHERE image_id = %s;", (image_id,))
+                image_db_row = cur.fetchone()
+                if not image_db_row:
+                    return jsonify({"success": False, "message": "Image not found"}), 404
+
+                image_pk_id = image_db_row[0]
+                if favorite:
+                    cur.execute("""
+                        INSERT INTO favorites (username, image_id) VALUES (%s, %s)
+                        ON CONFLICT DO NOTHING;
+                    """, (g.username, image_pk_id))
+                else:
+                    cur.execute("DELETE FROM favorites WHERE username = %s AND image_id = %s;",
+                                (g.username, image_pk_id))
+
+        print(f"[FAVORITES] {g.username} {'added' if favorite else 'removed'} {image_id}")
+        return jsonify({"success": True, "favorite": favorite}), 200
+
+    except Exception as e:
+        print(f"[FAVORITES] Error updating favorite: {e}")
+        return jsonify({"success": False, "message": "Internal server error"}), 500
+    finally:
+        conn.close()
+
 
 @app.route('/api/images/<path:image_id>/description', methods=['PUT'])
 @require_auth

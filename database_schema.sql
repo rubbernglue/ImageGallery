@@ -29,6 +29,14 @@ CREATE TABLE image_tags (
     PRIMARY KEY (image_id, tag_id)
 );
 
+-- Per-user favorite images (see also add_favorites.sql for existing databases)
+CREATE TABLE favorites (
+    username VARCHAR(100) NOT NULL,
+    image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (username, image_id)
+);
+
 -- Function to update the updated_at timestamp automatically
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
