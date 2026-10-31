@@ -10,7 +10,8 @@ A web-based film photography archive management system with a Python Flask API b
 - **Tag Management**: Add/remove tags on single or multiple images at once
 - **Bulk Operations**: Select multiple images and tag them all at once
 - **Descriptions**: Add detailed descriptions to images
-- **Incremental Updates**: Add new image batches without rewriting entire database
+- **Favorites**: Each logged-in user can favorite images and filter on them
+- **Incremental Updates**: `update_all.py` processes only new/changed images and keeps tags when files are renamed
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## Tech Stack
@@ -40,7 +41,7 @@ A web-based film photography archive management system with a Python Flask API b
 
 3. **Configure PostgreSQL**
    
-   Update the database credentials in both `setup_database.py` and `api_server.py`:
+   Update the database credentials in `setup_database.py`, `api_server.py` and `update_all.py`:
    ```python
    DB_CONFIG = {
        'database': 'imagearchive',
@@ -53,43 +54,42 @@ A web-based film photography archive management system with a Python Flask API b
 
 ## Setup
 
-### 1. Scan Your Image Library
+### 1. Initialize the Database
 
-The scanner expects images organized in this structure:
+```bash
+python setup_database.py
+psql -U postgres -d imagearchive -f database_schema_exif.sql
+psql -U postgres -d imagearchive -f add_reload_flag.sql
+psql -U postgres -d imagearchive -f add_favorites.sql
+```
+
+`setup_database.py` creates the database and the core tables; the SQL files add the EXIF
+columns, the reload flag and the favorites table. (`update_all.py` adds the `content_hash`
+column itself; see `add_content_hash.sql`.)
+
+### 2. Import Your Images
+
+Set the source and library paths at the top of `update_all.py`, then run:
+
+```bash
+python update_all.py --dry-run   # see what would happen
+python update_all.py
+```
+
+It creates 600px and 2560px versions of every source image, reads EXIF and fills the
+database. The library ends up organized like this:
 ```
 /opt/media/
 ├── rollfilm/
 │   └── batch_name/
 │       └── image_base_name/
-│           ├── 600/image.jpg    (thumbnail)
-│           └── 2560/image.jpg   (high-res)
+│           ├── 600/image_base_name.jpg    (thumbnail)
+│           └── 2560/image_base_name.jpg   (high-res)
 └── sheetfilm/
-    └── batch_name/
-        └── image_base_name/
-            ├── 600/image.jpg
-            └── 2560/image.jpg
+    └── ...
 ```
 
-Update `BASE_DIR` in `library_scanner.py` if your images are in a different location, then run:
-
-```bash
-python library_scanner.py
-```
-
-This generates `image_data.json` with metadata about all your images.
-
-### 2. Initialize the Database
-
-Run the setup script to create the database and populate it:
-
-```bash
-python setup_database.py
-```
-
-This will:
-- Create the `imagearchive` database
-- Create all required tables (images, tags, image_tags)
-- Populate the database from `image_data.json`
+See `UPDATE_WORKFLOW.md` for all options (renames, orphans, reloading marked images).
 
 ### 3. Start the API Server
 
@@ -101,28 +101,21 @@ The API will be available at `http://localhost:5000`
 
 ### 4. Open the Frontend
 
-Simply open `image_gallery.html` in your web browser:
-
-```bash
-# On Linux
-xdg-open image_gallery.html
-
-# On macOS
-open image_gallery.html
-
-# On Windows
-start image_gallery.html
-```
-
-Or just double-click the file in your file manager.
+The frontend (`html/image_gallery.html`) calls the API with relative URLs (`/api/...`) and
+loads images from `/media/...`, so serve it through nginx together with the API; see
+`nginx_imagearchive.conf`. Copy the file to the nginx root after each change.
 
 ## API Endpoints
 
 - `GET /api/images` - List all images with metadata and tags
 - `GET /api/images/<image_id>` - Get single image details
-- `PUT /api/images/<image_id>/description` - Update image description
-- `PUT /api/images/<image_id>/tags` - Update image tags (replaces all)
-- `POST /api/images/<image_id>/tags` - Update image tags (alternative method)
+- `PUT /api/images/<image_id>/description` - Update image description (login)
+- `PUT|POST /api/images/<image_id>/tags` - Replace image tags (login)
+- `POST /api/images/bulk/tags` - Replace tags on many images in one request (login)
+- `PUT /api/images/<image_id>/reload` - Set/clear the "needs reload" flag (login)
+- `PUT /api/images/<image_id>/favorite` - Add/remove a favorite for the logged-in user (login)
+- `GET /api/favorites` - List the logged-in user's favorites (login)
+- `POST /api/auth/login`, `POST /api/auth/logout`
 
 ## Configuration
 
@@ -132,31 +125,29 @@ The frontend converts file system paths to web URLs. By default:
 - File system: `/opt/media/...`
 - Web URL: `/media/...`
 
-Update the `filePathToWebUrl()` function in `image_gallery.html` if your paths differ.
+Update the `filePathToWebUrl()` function in `html/image_gallery.html` if your paths differ.
 
 ### API Base URL
 
-The frontend connects to the API at `http://localhost:5000` by default. Update `API_BASE_URL` in `image_gallery.html` if deploying to a different host.
+The frontend uses the relative `API_BASE_URL` `/api/images`, so it expects nginx to proxy `/api/` to the Flask server on the same host.
 
 ## Database Schema
 
-The database consists of three main tables:
-
-- **images**: Core image metadata (paths, film type, description, etc.)
+- **images**: Core image metadata (paths, film type, description, EXIF, reload flag, content fingerprint)
 - **tags**: Unique tag names
 - **image_tags**: Many-to-many relationship between images and tags
+- **favorites**: Per-user favorite images
 
-See `database_schema.sql` for the complete schema.
+See `database_schema.sql` plus the `database_schema_exif.sql` and `add_*.sql` files.
 
 ## Development
 
 ### Re-scanning Images
 
-If you add new images to your library:
+After adding, editing or renaming source images:
 
 ```bash
-python library_scanner.py
-python setup_database.py  # Re-run to add new images
+python update_all.py
 ```
 
 ### Resetting the Database
@@ -173,7 +164,7 @@ Then re-run `python setup_database.py`
 
 **Frontend shows "Could not load required image data from API"**
 - Make sure the API server is running (`python api_server.py`)
-- Check that `API_BASE_URL` in `image_gallery.html` matches your server
+- Check that nginx proxies `/api/` to the API server
 - Check browser console for CORS errors
 
 **Database connection errors**
@@ -222,25 +213,8 @@ MIT License - feel free to use and modify for your own projects.
 
 ## Updating the Database
 
-### Adding New Images
-
-**Option 1: Update from full scan**
-```bash
-python library_scanner.py  # Scan all images
-python update_database.py  # Add new images to database
-```
-
-**Option 2: Update specific subdirectory**
-```bash
-python update_database.py --scan-dir /opt/media/rollfilm 645_2025_Nikon_med_Ilford
-```
-
-**Option 3: Update from existing JSON**
-```bash
-python update_database.py --json my_images.json
-```
-
-The update script only adds new images and skips existing ones, preserving all tags and descriptions.
+Run `update_all.py`; it only adds new images, refreshes changed ones and never touches tags,
+descriptions or favorites (renamed images keep theirs). See `UPDATE_WORKFLOW.md`.
 
 ## Usage Guide
 
@@ -333,46 +307,11 @@ The search includes year, month, day, and full date formats.
 
 ## Performance Optimization
 
-### Index File for Faster Processing
+`update_all.py` keeps two files in the library root:
 
-The `process_scaled_library.sh` script now uses an index file to track processed images:
+- `.processing_index`: source/target paths with each source's mtime and size, so unchanged
+  images are skipped without being re-read. Use `--force` to re-process everything.
+- `.fingerprint_cache`: pixel fingerprints of the 600px versions, so rename detection only
+  fingerprints new or changed images.
 
-**Location:** `/mnt/omv/Photo/Picture_library/.processing_index`
-
-**Benefits:**
-- ⚡ 10-100x faster on subsequent runs
-- Skips unchanged files instantly (no file stat needed)
-- Only checks files that might have changed
-- Automatically maintained
-
-**Performance comparison:**
-- **Without index**: Check 8000 files = ~2-5 minutes
-- **With index**: Check 8000 files = ~5-10 seconds
-
-**The index tracks:**
-- Source file path
-- Target file path  
-- File modification time
-- File size
-
-**Deep EXIF check (optional):**
-Set environment variable to enable slower but more thorough EXIF checking:
-```bash
-DEEP_EXIF_CHECK=1 ./process_scaled_library.sh
-```
-
-This compares EXIF data between source and target (slower but catches EXIF-only changes).
-
-### Index Maintenance
-
-The index is automatically maintained - no manual intervention needed!
-
-**Force rebuild everything:**
-```bash
-# Delete index to force full re-check
-rm /mnt/omv/Photo/Picture_library/.processing_index
-
-# Re-run script
-./process_scaled_library.sh
-```
-
+Both are rebuilt automatically if deleted (the first run after that is slower).

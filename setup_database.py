@@ -85,7 +85,7 @@ def populate_from_json():
     
     if not os.path.exists(json_file):
         print(f"\n{json_file} not found. Skipping data population.")
-        print("Run 'python library_scanner.py' to generate image_data.json first.")
+        print("Skipping: run 'python update_all.py' to import images instead.")
         return True
     
     try:
